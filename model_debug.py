@@ -1,0 +1,242 @@
+import torch
+import torch.nn as nn
+from torch.nn import init
+from torchvision import models
+
+class Normalize(nn.Module):
+    def __init__(self, power=2):
+        super(Normalize, self).__init__()
+        self.power = power
+    
+    def forward(self, x):
+        norm = x.pow(self.power).sum(1, keepdim=True).pow(1./self.power)
+        out = x.div(norm)
+        return out
+
+# #####################################################################
+def weights_init_kaiming(m):
+    classname = m.__class__.__name__
+    # print(classname)
+    if classname.find('Conv') != -1:
+        init.kaiming_normal_(m.weight.data, a=0, mode='fan_in')
+    elif classname.find('Linear') != -1:
+        init.kaiming_normal_(m.weight.data, a=0, mode='fan_out')
+        # init.normal_(m.weight.data, 0, 0.001)
+        init.zeros_(m.bias.data)
+    elif classname.find('BatchNorm1d') != -1:
+        init.normal_(m.weight.data, 1.0, 0.01)
+        init.zeros_(m.bias.data)
+
+def weights_init_classifier(m):
+    classname = m.__class__.__name__
+    if classname.find('Linear') != -1:
+        init.normal_(m.weight.data, 0, 0.001)
+        init.zeros_(m.bias.data)
+
+# Defines the new fc layer and classification layer
+# |--Linear--|--bn--|--relu--|--Linear--|
+class FeatureBlock(nn.Module):
+    def __init__(self, input_dim, low_dim):
+        super(FeatureBlock, self).__init__()
+        feat_block = []
+        feat_block += [nn.Linear(input_dim, low_dim)] 
+        feat_block += [nn.BatchNorm1d(low_dim)]
+        
+        feat_block = nn.Sequential(*feat_block)
+        feat_block.apply(weights_init_kaiming)
+        self.feat_block = feat_block
+    def forward(self, x):
+        x = self.feat_block(x)
+        return x
+        
+class ClassBlock(nn.Module):
+    def __init__(self, input_dim, class_num, dropout=0.5, relu=True):
+        super(ClassBlock, self).__init__()
+        classifier = []       
+        if relu:
+            classifier += [nn.LeakyReLU(0.1)]
+        if dropout:
+            classifier += [nn.Dropout(p=dropout)]
+        
+        classifier += [nn.Linear(input_dim, class_num)]
+        classifier = nn.Sequential(*classifier)
+        classifier.apply(weights_init_classifier)
+
+        self.classifier = classifier
+    def forward(self, x):
+        x = self.classifier(x)
+        return x       
+
+# Define the ResNet18-based Model
+class visible_net_resnet(nn.Module):
+    def __init__(self, arch ='resnet18'):
+        super(visible_net_resnet, self).__init__()
+        if arch =='resnet18':
+            model_ft = models.resnet18(pretrained=True)
+        elif arch =='resnet50':
+            model_ft = models.resnet50(pretrained=True)
+
+        for mo in model_ft.layer4[0].modules():
+            if isinstance(mo, nn.Conv2d):
+                mo.stride = (1, 1)
+
+        # avg pooling to global pooling
+        model_ft.avgpool = nn.AdaptiveAvgPool2d((1,1))
+        self.visible = model_ft
+        self.dropout = nn.Dropout(p=0.5)
+        
+    def forward(self, x):
+        x = self.visible.conv1(x)
+        x = self.visible.bn1(x)
+        x = self.visible.relu(x)
+        x = self.visible.maxpool(x)
+        x = self.visible.layer1(x)
+        x = self.visible.layer2(x)
+        x = self.visible.layer3(x)
+        x = self.visible.layer4(x)              # [batch_size,2048,18,9]
+        ori_x = x
+
+        num_part = 6
+        sx = x.size(2) / num_part
+        sx = int(sx)
+        kx = x.size(2)-sx*(num_part - 1)
+        kx = int(kx)
+
+        ## faeture segmentation
+        x = nn.functional.avg_pool2d(x, kernel_size=(kx, x.size(3)), stride=(sx, x.size(3)))        #[batch_size, 2048, 6, 1]
+        x = x.view(x.size(0), x.size(1), x.size(2))
+        # x = self.dropout(x)
+
+        return x,ori_x
+        
+class thermal_net_resnet(nn.Module):
+    def __init__(self, arch ='resnet18'):
+        super(thermal_net_resnet, self).__init__()
+        if arch =='resnet18':
+            model_ft = models.resnet18(pretrained=True)
+        elif arch =='resnet50':
+            model_ft = models.resnet50(pretrained=True)
+
+        for mo in model_ft.layer4[0].modules():
+            if isinstance(mo, nn.Conv2d):
+                mo.stride = (1, 1)
+
+        # avg pooling to global pooling
+        model_ft.avgpool = nn.AdaptiveAvgPool2d((1,1))
+        self.thermal = model_ft
+        self.dropout = nn.Dropout(p=0.5)
+    def forward(self, x):
+        x = self.thermal.conv1(x)
+        x = self.thermal.bn1(x)
+        x = self.thermal.relu(x)
+        x = self.thermal.maxpool(x)
+        x = self.thermal.layer1(x)
+        x = self.thermal.layer2(x)
+        x = self.thermal.layer3(x)
+        x = self.thermal.layer4(x)
+        ori_x = x
+        
+        num_part = 6 # number of part
+        # pool size
+        sx = x.size(2) / num_part
+        sx = int(sx)
+        kx = x.size(2) - sx * (num_part-1)
+        kx = int(kx)
+        x = nn.functional.avg_pool2d(x, kernel_size=(kx, x.size(3)), stride=(sx, x.size(3)))
+        #x = self.thermal.avgpool(x)
+        x = x.view(x.size(0), x.size(1), x.size(2))
+        # x = self.dropout(x)
+        
+        return x,ori_x
+
+
+class embed_net_debug(nn.Module):
+    def __init__(self, low_dim, class_num, drop=0.5, arch ='resnet50'):
+        super(embed_net_debug, self).__init__()
+        if arch =='resnet18':
+            self.visible_net = visible_net_resnet(arch = arch)
+            self.thermal_net = thermal_net_resnet(arch = arch)
+            pool_dim = 512
+        elif arch =='resnet50':
+            self.visible_net = visible_net_resnet(arch = arch)
+            self.thermal_net = thermal_net_resnet(arch = arch)
+            pool_dim = 2048
+
+        self.feature1 = FeatureBlock(pool_dim, low_dim)
+        self.feature2 = FeatureBlock(pool_dim, low_dim)
+        self.feature3 = FeatureBlock(pool_dim, low_dim)
+        self.feature4 = FeatureBlock(pool_dim, low_dim)
+        self.feature5 = FeatureBlock(pool_dim, low_dim)
+        self.feature6 = FeatureBlock(pool_dim, low_dim)
+        self.classifier1 = ClassBlock(low_dim, class_num, dropout=drop)
+        self.classifier2 = ClassBlock(low_dim, class_num, dropout=drop)
+        self.classifier3 = ClassBlock(low_dim, class_num, dropout=drop)
+        self.classifier4 = ClassBlock(low_dim, class_num, dropout=drop)
+        self.classifier5 = ClassBlock(low_dim, class_num, dropout=drop)
+        self.classifier6 = ClassBlock(low_dim, class_num, dropout=drop)
+
+        self.l2norm = Normalize(2)
+        
+    def forward(self, x1, x2, modal=None):
+        if modal ==1:
+            x,ori_x = self.visible_net(x1)
+            x = x.chunk(6,2)
+            x_0 = x[0].contiguous().view(x[0].size(0),-1)
+            x_1 = x[1].contiguous().view(x[1].size(0), -1)
+            x_2 = x[2].contiguous().view(x[2].size(0), -1)
+            x_3 = x[3].contiguous().view(x[3].size(0), -1)
+            x_4 = x[4].contiguous().view(x[4].size(0), -1)
+            x_5 = x[5].contiguous().view(x[5].size(0), -1)
+        
+        elif modal==2:
+            x,ori_x = self.thermal_net(x2)
+            x = x.chunk(6, 2)
+            x_0 = x[0].contiguous().view(x[0].size(0), -1)
+            x_1 = x[1].contiguous().view(x[1].size(0), -1)
+            x_2 = x[2].contiguous().view(x[2].size(0), -1)
+            x_3 = x[3].contiguous().view(x[3].size(0), -1)
+            x_4 = x[4].contiguous().view(x[4].size(0), -1)
+            x_5 = x[5].contiguous().view(x[5].size(0), -1)
+
+        y_0 = self.feature1(x_0)
+        y_1 = self.feature2(x_1)
+        y_2 = self.feature3(x_2)
+        y_3 = self.feature4(x_3)
+        y_4 = self.feature5(x_4)
+        y_5 = self.feature6(x_5)
+
+        out_0 = self.classifier1(y_0)
+        out_1 = self.classifier2(y_1)
+        out_2 = self.classifier3(y_2)
+        out_3 = self.classifier4(y_3)
+        out_4 = self.classifier5(y_4)
+        out_5 = self.classifier6(y_5)
+        
+        if self.training:
+            return (out_0, out_1, out_2, out_3, out_4, out_5), (self.l2norm(y_0), self.l2norm(y_1), self.l2norm(y_2), self.l2norm(y_3), self.l2norm(y_4), self.l2norm(y_5))
+        else:
+            x_0 = self.l2norm(x_0)
+            x_1 = self.l2norm(x_1)
+            x_2 = self.l2norm(x_2)
+            x_3 = self.l2norm(x_3)
+            x_4 = self.l2norm(x_4)
+            x_5 = self.l2norm(x_5)
+            x = torch.cat((x_0, x_1, x_2, x_3, x_4, x_5), 1)
+
+            y_0 = self.l2norm(y_0)
+            y_1 = self.l2norm(y_1)
+            y_2 = self.l2norm(y_2)
+            y_3 = self.l2norm(y_3)
+            y_4 = self.l2norm(y_4)
+            y_5 = self.l2norm(y_5)
+            y = torch.cat((y_0, y_1, y_2, y_3, y_4, y_5), 1)            #(batch_size, low_dim*6)
+            
+            return ori_x
+
+
+# debug model structure
+
+# net = embed_net(512, 319)
+# net.train()
+# input = torch.FloatTensor(8, 3, 224, 224)
+# x, y  = net(input, input)
