@@ -81,7 +81,6 @@ def eval_sysu(distmat, q_pids, g_pids, q_camids, g_camids, max_rank=20):
     return new_all_cmc, mAP
     
     
-    
 def eval_regdb(distmat, q_pids, g_pids, max_rank=20):
     num_q, num_g = distmat.shape
     if num_g < max_rank:
@@ -99,7 +98,7 @@ def eval_regdb(distmat, q_pids, g_pids, max_rank=20):
     # only two cameras
     q_camids = np.ones(num_q).astype(np.int32)
     g_camids = 2*np.ones(num_g).astype(np.int32)
-
+    
     for q_idx in range(num_q):
         q_pid = q_pids[q_idx]
         q_camid = q_camids[q_idx]
@@ -109,9 +108,65 @@ def eval_regdb(distmat, q_pids, g_pids, max_rank=20):
         remove = (g_pids[order] == q_pid) & (g_camids[order] == q_camid)
         keep = np.invert(remove)
         
-        if np.sum(remove.astype(np.int32)) >0:
-            print("check here")
-            import pdb;pdb.set_trace()
+        # compute cmc curve
+        raw_cmc = matches[q_idx][keep] # binary vector, positions with value 1 are correct matches
+        if not np.any(raw_cmc):
+            # this condition is true when query identity does not appear in gallery
+            continue
+
+        cmc = raw_cmc.cumsum()
+        cmc[cmc > 1] = 1
+        all_cmc.append(cmc[:max_rank])
+        num_valid_q += 1
+
+        # compute average precision
+        num_rel = raw_cmc.sum()
+        tmp_cmc = raw_cmc.cumsum()
+        tmp_cmc = [x / (i+1.) for i, x in enumerate(tmp_cmc)]
+        tmp_cmc = np.asarray(tmp_cmc) * raw_cmc
+        AP = tmp_cmc.sum() / num_rel
+        all_AP.append(AP)
+
+    assert num_valid_q > 0, "Error: all query identities do not appear in gallery"
+
+    all_cmc = np.asarray(all_cmc).astype(np.float32)
+    all_cmc = all_cmc.sum(0)/num_valid_q                # top max_rank acc;
+    mAP = np.mean(all_AP)
+
+    return all_cmc, mAP
+
+
+def eval_regdb_debug(distmat, q_pids, g_pids, max_rank=20):
+    num_q, num_g = distmat.shape
+    if num_g < max_rank:
+        max_rank = num_g
+        print("Note: number of gallery samples is quite small, got {}".format(num_g))
+    
+    indices = np.argsort(distmat, axis=1)
+    matches = (g_pids[indices] == q_pids[:, np.newaxis]).astype(np.int32)
+
+    # compute cmc curve for each query
+    all_cmc = []
+    all_AP = []
+    num_valid_q = 0. # number of valid query
+    
+    # only two cameras
+    q_camids = np.ones(num_q).astype(np.int32)
+    g_camids = 2*np.ones(num_g).astype(np.int32)
+    
+    bad_q =[]
+    for q_idx in range(num_q):
+        q_pid = q_pids[q_idx]
+        q_camid = q_camids[q_idx]
+
+        # remove gallery samples that have the same pid and camid with query
+        order = indices[q_idx]
+        remove = (g_pids[order] == q_pid) & (g_camids[order] == q_camid)
+        keep = np.invert(remove)
+        
+        right_num = np.sum(matches[q_idx][:max_rank])
+        if right_num < 0.5*max_rank:
+            bad_q.append(q_idx)
 
         # compute cmc curve
         raw_cmc = matches[q_idx][keep] # binary vector, positions with value 1 are correct matches
@@ -135,7 +190,15 @@ def eval_regdb(distmat, q_pids, g_pids, max_rank=20):
     assert num_valid_q > 0, "Error: all query identities do not appear in gallery"
 
     all_cmc = np.asarray(all_cmc).astype(np.float32)
-    all_cmc = all_cmc.sum(0)/num_valid_q        # top max_rank acc;
+    all_cmc = all_cmc.sum(0)/num_valid_q                # top max_rank acc;
     mAP = np.mean(all_AP)
+    
+    # with open('TSLFN_bad_match_ids.txt','wt') as f:
+    #     for i,q in enumerate(bad_q):
+    #         if i == len(bad_q)-1:
+    #             f.write("{}".format(q))
+    #         else:
+    #             f.write("{} ".format(q))
 
-    return all_cmc, mAP
+    # import pdb;pdb.set_trace()
+    return all_cmc, mAP, bad_q

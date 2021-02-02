@@ -1,6 +1,7 @@
 from __future__ import print_function
 import argparse
 import sys
+import cv2
 from PIL import Image
 import matplotlib.pyplot as plt
 
@@ -11,23 +12,25 @@ import torch.backends.cudnn as cudnn
 import torch.utils.data as data
 from data_loader import SYSUData, RegDBData, TestData
 from data_manager import *
-from eval_metrics import eval_sysu, eval_regdb
+from eval_metrics import eval_sysu, eval_regdb, eval_regdb_debug
 from model import embed_net
 # from model_debug import embed_net_debug           # vis pool feature distribution on original images
 
 from utils import *
 import time 
+import random
 import scipy.io as scio
 import Transform as transforms
 
 
-#python test.py --dataset regdb --trial 1 --gpu 1 --low-dim 512 --resume 'regdb_id_bn_relu_lr_1.0e-02_dim_512_whc_0.5_thd_0_pimg_8_ds_l2_md_all_lossback_trial_1_best.t' --w_hc 0.5
+#python test.py --dataset regdb --trial 1 --gpu 1 --low-dim 512 --visualization False --resume 'regdb_id_bn_relu_lr_1.0e-02_dim_512_whc_0.5_thd_0_pimg_8_ds_l2_md_all_trial_1_best.t' --w_hc 0.5
 
 
 parser = argparse.ArgumentParser(description='PyTorch Cross-Modality Training')
 parser.add_argument('--dataset', default='sysu',  help='dataset name: regdb or sysu]')
 parser.add_argument('--arch', default='resnet50', type=str, help='network baseline')
 parser.add_argument('--resume', '-r', default='', type=str, help='resume from checkpoint')
+parser.add_argument('--visualization', '-v', default=False, type=bool, help='visualization retrieval result')
 parser.add_argument('--workers', default=4, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
 parser.add_argument('--low-dim', default=512, type=int,
@@ -89,7 +92,8 @@ if len(args.resume)>0:
         print('==> loaded checkpoint {} (epoch {})'
               .format(args.resume, checkpoint['epoch']))
     else:
-        print('==> no checkpoint found at {}'.format(args.resume))
+        print('==> [Error] no checkpoint found at {}!!!'.format(args.resume))
+        sys.exit()
 
 print('==> Loading data..')
 normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],std=[0.229, 0.224, 0.225])
@@ -116,6 +120,7 @@ elif dataset =='regdb':
     
 nquery = len(query_label)
 ngall = len(gall_label)
+print("  ------------------------------")
 print("  Dataset statistics:")
 print("  ------------------------------")
 print("  subset   | # ids | # images")
@@ -175,28 +180,59 @@ def save_feat(numpy_feat,save_path):
     np.save(save_path,numpy_feat) 
     print("save to ",save_path)
 
-def draw_retri_images(distmat, save_path, num_id_to_draw=5, top_k_to_plot=10):
+def draw_rect(img,color_mode):
+    img = np.array(img)
+    rects = [(0, 0, img.shape[1], img.shape[0])]
+    for x, y, w, h in rects:
+        cv2.rectangle(img, (x, y), (x+w, y+h), color_mode, 2)
+    return img
+
+def draw_retri_images(distmat, save_path, draw_id_list=None, bad_match_ids=None, num_id_to_draw=5, top_k_to_plot=10):
     num_q = distmat.shape[0]
-    indices = np.argsort(distmat, axis=1)
-    draw_id_list = np.random.choice(num_q,num_id_to_draw,replace=False)
+    
+    if draw_id_list is None:
+        pool = np.arange(num_q,dtype=int)
+
+        if bad_match_ids is not None:
+            pool = np.delete(pool,bad_match_ids)
+            print("removing bad_match_ids")
+
+        draw_id_list = np.random.choice(pool,num_id_to_draw,replace=False)
+    else:
+        if len(draw_id_list) != num_id_to_draw:
+            draw_id_list = random.sample(draw_id_list,num_id_to_draw)
     print("draw_id_list: ",draw_id_list)
 
+    indices = np.argsort(distmat, axis=1)
+
     fig=plt.figure(figsize=(8, 8))
-    row = num_id_to_draw
+    row = len(draw_id_list)
     column = top_k_to_plot+1 
     for qi, qid in enumerate(draw_id_list):
         q_img_path = query_img_path[qid]
         q_img = Image.open(q_img_path)
-
+        
+        print("------")
+        print("query label, ",query_label[qid])
+        
         fig.add_subplot(row,column,qi*(top_k_to_plot+1)+1)
         plt.imshow(q_img)
         plt.axis('off')
         
         order = indices[qid,:]
+        top_k_g_labels = gall_label[order][:top_k_to_plot]
+        print("gallery labels (top k), ",top_k_g_labels)
         g_img_paths = [gall_img_path[i] for i in order[:top_k_to_plot]]
-        
+
         for gi, g_img_path in enumerate(g_img_paths):
             g_img = Image.open(g_img_path)
+            
+            if top_k_g_labels[gi] != query_label[qid]:
+                color_mode = (255, 0, 0)            # wrong
+            else:
+                color_mode = (0, 255, 0)            # right
+            g_img = draw_rect(g_img, color_mode)
+
             fig.add_subplot(row,column,qi*(top_k_to_plot+1)+2+gi)
             plt.imshow(g_img)
             plt.axis('off')
@@ -217,15 +253,19 @@ if dataset =='regdb':
     gall_feat, gall_feat_pool = extract_feat(gall_loader,ngall,test_mode[0])
     # gall_feat_pool = extract_feat_debug(gall_loader,ngall,test_mode[0])
     # save_feat(query_feat_pool,'query_feat_pool.npy')
+    
     ##### -------- fc feature 
     distmat = np.matmul(query_feat, np.transpose(gall_feat))
-    cmc, mAP = eval_regdb(-distmat, query_label, gall_label,max_rank=20)
+    cmc, mAP = eval_regdb(-distmat, query_label, gall_label, max_rank=20)
 
-    draw_retri_images(distmat,save_path='result.pdf',num_id_to_draw=5)
-    
-    import pdb;pdb.set_trace()
-    print("query_feat shape, ", query_feat.shape)
-    print("gall_feat shape, ", gall_feat.shape)
+    if args.visualization:
+        cmc, mAP, bad_match_ids = eval_regdb_debug(-distmat, query_label, gall_label, max_rank=20)
+        print("ratio of bad_match_id: {}/{}".format(len(bad_match_ids),nquery))  
+        # bad_match_ids = None
+
+        draw_retri_images(-distmat,draw_id_list=bad_match_ids,bad_match_ids=None,save_path='./result/result.pdf',num_id_to_draw=5)
+
+    print("==== Result ====")
     print ('Test Trial: {}'.format(args.trial))
     print('FC: top-1: {:.2%} | top-5: {:.2%} | top-10: {:.2%}| top-20: {:.2%}'.format(
         cmc[0], cmc[4], cmc[9], cmc[19]))

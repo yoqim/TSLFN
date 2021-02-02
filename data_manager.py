@@ -84,7 +84,7 @@ def process_test_regdb(img_dir, trial = 1, modal = 'visible'):
     with open(input_data_path) as f:
         data_file_list = open(input_data_path, 'rt').read().splitlines()
         # Get full list of image and labels
-        file_image = [img_dir + '/' + s.split(' ')[0] for s in data_file_list]
+        file_image = [img_dir + s.split(' ')[0] for s in data_file_list]
         file_label = [int(s.split(' ')[1]) for s in data_file_list]
         
     return file_image, np.array(file_label)
