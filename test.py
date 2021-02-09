@@ -23,7 +23,7 @@ import scipy.io as scio
 import Transform as transforms
 
 
-#python test.py --dataset regdb --trial 1 --gpu 1 --low-dim 512 --visualization False --resume 'regdb_id_bn_relu_lr_1.0e-02_dim_512_whc_0.5_thd_0_pimg_8_ds_l2_md_all_trial_1_best.t' --w_hc 0.5
+#python test.py --dataset regdb --trial 1 --gpu 1 --low-dim 512 --visualization True --resume 'regdb_id_bn_relu_lr_1.0e-02_dim_512_whc_0.5_thd_0_pimg_8_ds_l2_md_all_trial_1_best.t' --w_hc 0.5
 
 
 parser = argparse.ArgumentParser(description='PyTorch Cross-Modality Training')
@@ -76,9 +76,13 @@ elif dataset =='regdb':
 best_acc = 0  # best test accuracy
 start_epoch = 0 
 
+if args.visualization:
+    bad_thre = 0.5
+    num_id_to_draw = 10
+
 print('==> Building model..')
 net = embed_net(args.low_dim, n_class, drop=0.0, arch=args.arch)
-# net = embed_net_debug(args.low_dim, n_class, drop=0.0, arch=args.arch)
+# net = embed_net_debug(args.low_dim, n_class, drop=0.0, arch=args.arch)                # draw pool features
 net.cuda()    
 cudnn.benchmark = True
 
@@ -259,12 +263,13 @@ if dataset =='regdb':
     cmc, mAP = eval_regdb(-distmat, query_label, gall_label, max_rank=20)
 
     if args.visualization:
-        cmc, mAP, bad_match_ids = eval_regdb_debug(-distmat, query_label, gall_label, max_rank=20)
-        print("ratio of bad_match_id: {}/{}".format(len(bad_match_ids),nquery))  
+        cmc, mAP, bad_match_ids = eval_regdb_debug(-distmat, query_label, gall_label, bad_thre, max_rank=20, write_bad_to_txt=True)
+        print("ratio of bad_match_id(top50, thre{}): {}/{}".format(bad_thre,len(bad_match_ids),nquery))  
         # bad_match_ids = None
 
-        draw_retri_images(-distmat,draw_id_list=bad_match_ids,bad_match_ids=None,save_path='./result/result.pdf',num_id_to_draw=5)
-
+        draw_retri_images(-distmat,draw_id_list=bad_match_ids,bad_match_ids=None,save_path='./result/badcase_top50_thre{}_mAP{:.2f}.pdf'.format(bad_thre,mAP*100),num_id_to_draw=num_id_to_draw)            # draw bad matched queries
+        # draw_retri_images(-distmat,draw_id_list=None,bad_match_ids=None,save_path='./result/result_rand_nid{}.pdf'.format(num_id_to_draw),num_id_to_draw=num_id_to_draw)                                # draw random queries
+    
     print("==== Result ====")
     print ('Test Trial: {}'.format(args.trial))
     print('FC: top-1: {:.2%} | top-5: {:.2%} | top-10: {:.2%}| top-20: {:.2%}'.format(

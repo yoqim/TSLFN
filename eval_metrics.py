@@ -136,7 +136,22 @@ def eval_regdb(distmat, q_pids, g_pids, max_rank=20):
     return all_cmc, mAP
 
 
-def eval_regdb_debug(distmat, q_pids, g_pids, max_rank=20):
+def write_ids_to_txt(bad_q_ids,bad_q_labels,bad_g_labels,txt_path):
+    with open(txt_path,'wt') as f:
+        for i,qid in enumerate(bad_q_ids):
+            f.writelines("id:{}, qlabel:{}\n".format(qid,bad_q_labels[i]))
+
+            for j,gid in enumerate(bad_g_labels[i]):
+                if j == len(bad_g_labels[i])-1:
+                    f.writelines("{}\n".format(gid))
+                else:
+                    f.writelines("{} ".format(gid))
+            
+            if i!= len(bad_q_ids)-1:
+                f.writelines('\n')
+    print("save bad case ids to ",txt_path)
+
+def eval_regdb_debug(distmat, q_pids, g_pids, bad_thre=0.5, max_rank=20, write_bad_to_txt=False):
     num_q, num_g = distmat.shape
     if num_g < max_rank:
         max_rank = num_g
@@ -154,7 +169,9 @@ def eval_regdb_debug(distmat, q_pids, g_pids, max_rank=20):
     q_camids = np.ones(num_q).astype(np.int32)
     g_camids = 2*np.ones(num_g).astype(np.int32)
     
-    bad_q =[]
+    bad_q_ids =[]
+    bad_g_labels = []
+    bad_q_labels = []
     for q_idx in range(num_q):
         q_pid = q_pids[q_idx]
         q_camid = q_camids[q_idx]
@@ -164,9 +181,12 @@ def eval_regdb_debug(distmat, q_pids, g_pids, max_rank=20):
         remove = (g_pids[order] == q_pid) & (g_camids[order] == q_camid)
         keep = np.invert(remove)
         
-        right_num = np.sum(matches[q_idx][:max_rank])
-        if right_num < 0.5*max_rank:
-            bad_q.append(q_idx)
+        right_num = np.sum(matches[q_idx][:50])
+        if right_num < bad_thre*np.sum(matches[q_idx]):
+            bad_q_ids.append(q_idx)
+            bad_q_labels.append(q_pid)
+            bad_g_label = g_pids[order][:max_rank] 
+            bad_g_labels.append(bad_g_label)
 
         # compute cmc curve
         raw_cmc = matches[q_idx][keep] # binary vector, positions with value 1 are correct matches
@@ -192,13 +212,8 @@ def eval_regdb_debug(distmat, q_pids, g_pids, max_rank=20):
     all_cmc = np.asarray(all_cmc).astype(np.float32)
     all_cmc = all_cmc.sum(0)/num_valid_q                # top max_rank acc;
     mAP = np.mean(all_AP)
-    
-    # with open('TSLFN_bad_match_ids.txt','wt') as f:
-    #     for i,q in enumerate(bad_q):
-    #         if i == len(bad_q)-1:
-    #             f.write("{}".format(q))
-    #         else:
-    #             f.write("{} ".format(q))
 
-    # import pdb;pdb.set_trace()
-    return all_cmc, mAP, bad_q
+    if write_bad_to_txt:
+        write_ids_to_txt(bad_q_ids,bad_q_labels,bad_g_labels,'./result/badcase_top50_thre{}_mAP{:.2f}.id'.format(bad_thre,mAP*100))
+
+    return all_cmc, mAP, bad_q_ids
