@@ -13,8 +13,8 @@ import torch.utils.data as data
 from data_loader import SYSUData, RegDBData, TestData
 from data_manager import *
 from eval_metrics import eval_sysu, eval_regdb, eval_regdb_debug
-from model import embed_net
-# from model_debug import embed_net_debug           # vis pool feature distribution on original images
+from models.model import embed_net
+# from models.model_debug import embed_net_debug           # vis pool feature distribution on original images
 
 from utils import *
 import time 
@@ -65,7 +65,7 @@ os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
 
 dataset = args.dataset
 if dataset == 'sysu':
-    data_path = '../IVReIDData/SYSU-MM01/'
+    data_path = './data/sysu/'
     n_class = 395
     test_mode = [1, 2] 
 elif dataset =='regdb':
@@ -203,10 +203,10 @@ def draw_retri_images(distmat, save_path, draw_id_list=None, bad_match_ids=None,
 
         draw_id_list = np.random.choice(pool,num_id_to_draw,replace=False)
     else:
-        if len(draw_id_list) != num_id_to_draw:
+        if len(draw_id_list) > num_id_to_draw:
             draw_id_list = random.sample(draw_id_list,num_id_to_draw)
-    print("draw_id_list: ",draw_id_list)
 
+    print("draw_id_list: ",draw_id_list)
     indices = np.argsort(distmat, axis=1)
 
     fig=plt.figure(figsize=(8, 8))
@@ -245,9 +245,19 @@ def draw_retri_images(distmat, save_path, draw_id_list=None, bad_match_ids=None,
     print("save to ",save_path)
 
 
+def ReadBadIndex(txt_path):
+    with open(txt_path,'r') as f:
+        lines = f.readlines()
+    lines = lines[0]
+    lines = lines.strip().split()
+    line = [int(i) for i in lines]
+
+    return line
 
 query_feat, query_feat_pool = extract_feat(query_loader,nquery,test_mode[1])    
 # query_feat_pool = extract_feat_debug(query_loader,nquery,test_mode[1])  
+
+import pdb;pdb.set_trace()
 
 all_cmc = 0
 all_mAP = 0 
@@ -263,11 +273,15 @@ if dataset =='regdb':
     cmc, mAP = eval_regdb(-distmat, query_label, gall_label, max_rank=20)
 
     if args.visualization:
-        cmc, mAP, bad_match_ids = eval_regdb_debug(-distmat, query_label, gall_label, bad_thre, max_rank=20, write_bad_to_txt=True)
+        cmc, mAP, bad_match_ids = eval_regdb_debug(-distmat, query_label, gall_label, bad_thre, max_rank=20, write_bad_to_txt=False)
         print("ratio of bad_match_id(top50, thre{}): {}/{}".format(bad_thre,len(bad_match_ids),nquery))  
         # bad_match_ids = None
+        bad_match_ids = ReadBadIndex('same_id_index.txt')
+        bad_match_ids = bad_match_ids[10:20]
+        draw_retri_images(-distmat,draw_id_list=bad_match_ids,bad_match_ids=None,save_path='./result/ts_same_bad_case_10-20.pdf'.format(bad_thre,mAP*100),num_id_to_draw=num_id_to_draw)                    # draw selected bad matches
 
-        draw_retri_images(-distmat,draw_id_list=bad_match_ids,bad_match_ids=None,save_path='./result/badcase_top50_thre{}_mAP{:.2f}.pdf'.format(bad_thre,mAP*100),num_id_to_draw=num_id_to_draw)            # draw bad matched queries
+        # draw_retri_images(-distmat,draw_id_list=bad_match_ids,bad_match_ids=None,save_path='./result/badcase_top50_thre{}_mAP{:.2f}.pdf'.format(bad_thre,mAP*100),num_id_to_draw=num_id_to_draw)                    # draw bad matched queries
+        
         # draw_retri_images(-distmat,draw_id_list=None,bad_match_ids=None,save_path='./result/result_rand_nid{}.pdf'.format(num_id_to_draw),num_id_to_draw=num_id_to_draw)                                # draw random queries
     
     print("==== Result ====")

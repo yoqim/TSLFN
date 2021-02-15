@@ -102,7 +102,7 @@ class visible_net_resnet(nn.Module):
         kx = int(kx)
 
         ## faeture segmentation
-        x = nn.functional.avg_pool2d(x, kernel_size=(kx, x.size(3)), stride=(sx, x.size(3)))        #[batch_size, 2048, 6, 1]
+        x = nn.functional.avg_pool2d(x, kernel_size=(kx, x.size(3)), stride=(sx, x.size(3)))        # [batch_size, 2048, 6, 1]
         x = x.view(x.size(0), x.size(1), x.size(2))
         # x = self.dropout(x)
 
@@ -179,7 +179,7 @@ class embed_net(nn.Module):
         if modal==0:
             x1 = self.visible_net(x1)
             x1 = x1.chunk(6, 2)          # 沿2轴分成6块
-
+            
             x1_0 = x1[0].contiguous().view(x1[0].size(0), -1)
             x1_1 = x1[1].contiguous().view(x1[1].size(0), -1)
             x1_2 = x1[2].contiguous().view(x1[2].size(0), -1)

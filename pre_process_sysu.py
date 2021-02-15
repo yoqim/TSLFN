@@ -3,7 +3,7 @@ from PIL import Image
 import pdb
 import os
 
-data_path = '/home/omnisky/person_reID/HHL-master/stargan4reid/SYSU-MM01'
+data_path = '../IVReIDData/SYSU-MM01/'
 
 rgb_cameras = ['cam1','cam2','cam4','cam5']
 ir_cameras = ['cam3','cam6']
@@ -51,19 +51,18 @@ def read_imgs(train_image):
     train_img = []
     train_label = []
     for img_path in train_image:
-        # img
         img = Image.open(img_path)
         img = img.resize((fix_image_width, fix_image_height), Image.ANTIALIAS)
         pix_array = np.array(img)
 
         train_img.append(pix_array) 
         
-        # label
         pid = int(img_path[-13:-9])
         pid = pid2label[pid]
         train_label.append(pid)
     return np.array(train_img), np.array(train_label)
-       
+
+
 # rgb imges
 train_img, train_label = read_imgs(files_rgb)
 np.save(data_path + 'train_rgb_resized_img.npy', train_img)
