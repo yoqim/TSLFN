@@ -12,7 +12,7 @@ def process_query_sysu(data_path, mode = 'all', relabel=False):
     
     data_path = '../IVReIDData/SYSU-MM01/'
     file_path = os.path.join(data_path,'exp/test_id.txt')
-    # files_rgb = []
+
     files_ir = []
 
     with open(file_path, 'r') as file:

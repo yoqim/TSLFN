@@ -61,7 +61,6 @@ def eval_sysu(distmat, q_pids, g_pids, q_camids, g_camids, max_rank=20):
         num_valid_q += 1.
 
         # compute average precision
-        # reference: https://en.wikipedia.org/wiki/Evaluation_measures_(information_retrieval)#Average_precision
         num_rel = orig_cmc.sum()
         tmp_cmc = orig_cmc.cumsum()
         tmp_cmc = [x / (i+1.) for i, x in enumerate(tmp_cmc)]
@@ -79,7 +78,98 @@ def eval_sysu(distmat, q_pids, g_pids, q_camids, g_camids, max_rank=20):
     mAP = np.mean(all_AP)
 
     return new_all_cmc, mAP
+
+
+def eval_sysu_debug(distmat, q_pids, g_pids, q_camids, g_camids, query_img_path, gall_img_path, max_rank=20, write_bad_to_txt=False):
+    """Evaluation with sysu metric
+    Key: for each query identity, its gallery images from the same camera view are discarded.
+    """
+    num_q, num_g = distmat.shape
+    if num_g < max_rank:
+        max_rank = num_g
+        print("Note: number of gallery samples is quite small, got {}".format(num_g))
+    indices = np.argsort(distmat, axis=1)
+    pred_label = g_pids[indices]
+    matches = (g_pids[indices] == q_pids[:, np.newaxis]).astype(np.int32)
     
+    # compute cmc curve for each query
+    new_all_cmc = []
+    all_cmc = []
+    all_AP = []
+    num_valid_q = 0. # number of valid query
+
+    bad_q_ids =[]
+    bad_g_labels = []
+    bad_q_labels = []
+    bad_q_paths = []
+    bad_g_paths = []
+    for q_idx in range(num_q):
+
+        q_pid = q_pids[q_idx]
+        q_camid = q_camids[q_idx]
+
+        # remove gallery samples that have the same pid and camid with query
+        order = indices[q_idx]
+        
+        g_ori_path = [gall_img_path[g_idx] for g_idx in order]
+        remove = (q_camid == 3) & (g_camids[order] == 2)
+        keep = np.invert(remove)
+        
+        kk = keep.tolist()
+        g_ori_path = [g_ori_path[i] for i in range(len(kk)) if kk[i]==True]
+        new_cmc = pred_label[q_idx][keep]
+        new_index = np.unique(new_cmc, return_index=True)[1]
+        new_cmc = [new_cmc[index] for index in sorted(new_index)]
+        
+        g_final_path = [g_ori_path[index] for index in sorted(new_index)]
+        new_match = (new_cmc == q_pid).astype(np.int32)
+
+        first_right_idx = np.where(new_match == 1)[0][0]
+        if first_right_idx>10 and first_right_idx<20:
+            bad_q_ids.append(q_idx)
+            bad_q_labels.append(q_pid)
+            bgl = new_cmc[:max_rank]
+            bad_g_labels.append(bgl)
+
+            bad_q_paths.append(query_img_path[q_idx])
+            bad_g_paths.append(g_final_path)
+
+        new_cmc = new_match.cumsum()
+        new_all_cmc.append(new_cmc[:max_rank])
+        
+        orig_cmc = matches[q_idx][keep] # binary vector, positions with value 1 are correct matches
+        if not np.any(orig_cmc):
+            # this condition is true when query identity does not appear in gallery
+            continue
+
+        cmc = orig_cmc.cumsum()
+        cmc[cmc > 1] = 1
+
+        all_cmc.append(cmc[:max_rank])
+        num_valid_q += 1.
+
+        # compute average precision
+        num_rel = orig_cmc.sum()
+        tmp_cmc = orig_cmc.cumsum()
+        tmp_cmc = [x / (i+1.) for i, x in enumerate(tmp_cmc)]
+        tmp_cmc = np.asarray(tmp_cmc) * orig_cmc
+        AP = tmp_cmc.sum() / num_rel
+        all_AP.append(AP)
+    
+    assert num_valid_q > 0, "Error: all query identities do not appear in gallery"
+    
+    all_cmc = np.asarray(all_cmc).astype(np.float32)
+    all_cmc = all_cmc.sum(0) / num_valid_q
+    
+    new_all_cmc = np.asarray(new_all_cmc).astype(np.float32)
+    new_all_cmc = new_all_cmc.sum(0) / num_valid_q
+    mAP = np.mean(all_AP)
+
+    if write_bad_to_txt:
+        write_ids_to_txt(bad_q_ids,bad_q_labels,bad_g_labels,'./result/sysu_badcase_all_single_mAP{:.2f}.id'.format(mAP*100))
+
+    print("bad case num: {}/{}".format(len(bad_q_ids),num_q))
+    return new_all_cmc, mAP, bad_q_ids, bad_q_labels, bad_g_labels, bad_q_paths, bad_g_paths
     
 def eval_regdb(distmat, q_pids, g_pids, max_rank=20):
     num_q, num_g = distmat.shape
@@ -214,6 +304,6 @@ def eval_regdb_debug(distmat, q_pids, g_pids, bad_thre=0.5, max_rank=20, write_b
     mAP = np.mean(all_AP)
 
     if write_bad_to_txt:
-        write_ids_to_txt(bad_q_ids,bad_q_labels,bad_g_labels,'./result/badcase_top50_thre{}_mAP{:.2f}.id'.format(bad_thre,mAP*100))
+        write_ids_to_txt(bad_q_ids,bad_q_labels,bad_g_labels,'./result/regdb_badcase_top50_thre{}_mAP{:.2f}.id'.format(bad_thre,mAP*100))
 
     return all_cmc, mAP, bad_q_ids

@@ -68,11 +68,11 @@ parser.add_argument('--dist-type', default='l2', type=str,
                     help='type of distance')
 
 
-torch.manual_seed(1)
-torch.cuda.manual_seed(1)
-torch.cuda.manual_seed_all(1)
-np.random.seed(1)
-random.seed(1)
+# torch.manual_seed(1)
+# torch.cuda.manual_seed(1)
+# torch.cuda.manual_seed_all(1)
+# np.random.seed(1)
+# random.seed(1)
 
 def worker_init_fn(worker_id):
     # After creating the workers, each worker has an independent seed that is initialized to the curent random seed + the id of the worker
@@ -86,11 +86,11 @@ dataset = args.dataset
 if dataset == 'sysu':
     data_path = './data/sysu/'
     log_path = args.log_path + 'sysu_log/'
-    test_mode = [1, 2] # thermal to visible
+    test_mode = [1, 2]                          # thermal to visible
 elif dataset =='regdb':
     data_path = '../IVReIDData/RegDB/'
     log_path = args.log_path + 'regdb_log/'
-    test_mode = [2, 1] # visible to thermal
+    test_mode = [2, 1]                          # visible to thermal
 
 checkpoint_path = args.model_path
 
@@ -114,7 +114,7 @@ if not args.optim == 'sgd':
 if dataset =='regdb':
     suffix = suffix + '_trial_{}'.format(args.trial)
 
-suffix += '_RGA_att34'
+suffix += '_RGA_att4'
 
 test_log_file = open(log_path + suffix + '.txt', "w")
 sys.stdout = Logger(log_path  + suffix + '_os.txt')
@@ -216,6 +216,7 @@ if args.method =='id':
     criterion_het = hetero_loss(margin=thd, dist_type=args.dist_type)
     criterion_het.to(device)
 
+## setting different lr to baseline / classifiers
 def set_ignored_params(net):
     ignored_params = list(map(id, net.feature1.parameters())) \
                     + list(map(id, net.feature2.parameters())) \
@@ -230,16 +231,6 @@ def set_ignored_params(net):
                     + list(map(id, net.classifier5.parameters()))\
                     + list(map(id, net.classifier6.parameters()))
     return ignored_params
-
-def set_ignored_params_rga(net):
-    ignored_params = list(map(id, net.classifier1.parameters())) \
-                    + list(map(id, net.classifier2.parameters())) \
-                    + list(map(id, net.classifier3.parameters()))\
-                    + list(map(id, net.classifier4.parameters()))\
-                    + list(map(id, net.classifier5.parameters()))\
-                    + list(map(id, net.classifier6.parameters()))
-    return ignored_params
-
 
 def set_optimizer(optim_name,net,base_params):
     if optim_name == 'sgd':
@@ -264,6 +255,16 @@ def set_optimizer(optim_name,net,base_params):
             {'params': net.feature.parameters(), 'lr': args.lr},
             {'params': net.classifier.parameters(), 'lr': args.lr}],weight_decay=5e-4)
     return optimizer
+
+## setting different lr to baseline / classifiers
+def set_ignored_params_rga(net):
+    ignored_params = list(map(id, net.classifier1.parameters()))\
+                    + list(map(id, net.classifier2.parameters()))\
+                    + list(map(id, net.classifier3.parameters()))\
+                    + list(map(id, net.classifier4.parameters()))\
+                    + list(map(id, net.classifier5.parameters()))\
+                    + list(map(id, net.classifier6.parameters()))
+    return ignored_params
 
 def set_optimizer_rga(optim_name,net,base_params):
     if optim_name == 'sgd':
@@ -363,7 +364,7 @@ def extract_feat(data_loader,data_num,forward_mode):
 
 def train(epoch, loss_log):
     # current_lr = adjust_learning_rate(optimizer, epoch)
-    current_lr = adjust_learning_rate_rga(optimizer, epoch, change_epoch=[100,200])
+    current_lr = adjust_learning_rate_rga(optimizer, epoch, change_epoch=[300,500])
     train_loss = AverageMeter()
     data_time = AverageMeter()
     batch_time = AverageMeter()
@@ -473,7 +474,7 @@ for epoch in range(start_epoch, args.epochs+1-start_epoch):
     
     train(epoch, loss_log)
 
-    if epoch > 0 and epoch%2 ==0:
+    if epoch > 0 and epoch%2==0:
         print ('Test Epoch: {}'.format(epoch))
         print ('Test Epoch: {}'.format(epoch),file=test_log_file)
 
@@ -484,16 +485,6 @@ for epoch in range(start_epoch, args.epochs+1-start_epoch):
         print('FC:   Rank-1: {:.2%} | Rank-10: {:.2%} | Rank-20: {:.2%}| mAP: {:.2%}'.format(
                 cmc[0], cmc[9], cmc[19], mAP), file = test_log_file)
         test_log_file.flush()
-        
-        # if cmc[0] > best_acc: # not the real best for sysu-mm01 
-        #     best_acc = cmc[0]
-        #     state = {
-        #         'net': net.state_dict(),
-        #         'cmc': cmc,
-        #         'mAP': mAP,
-        #         'epoch': epoch,
-        #     }
-        #     torch.save(state, checkpoint_path + suffix + '_best.t')
         
         if mAP > best_mAP:
             best_mAP = mAP

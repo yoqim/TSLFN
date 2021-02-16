@@ -12,8 +12,9 @@ import torch.backends.cudnn as cudnn
 import torch.utils.data as data
 from data_loader import SYSUData, RegDBData, TestData
 from data_manager import *
-from eval_metrics import eval_sysu, eval_regdb, eval_regdb_debug
+from eval_metrics import eval_sysu, eval_regdb, eval_regdb_debug, eval_sysu_debug
 from models.model import embed_net
+from models.rga_model import embed_net_rga
 # from models.model_debug import embed_net_debug           # vis pool feature distribution on original images
 
 from utils import *
@@ -21,9 +22,6 @@ import time
 import random
 import scipy.io as scio
 import Transform as transforms
-
-
-#python test.py --dataset regdb --trial 1 --gpu 1 --low-dim 512 --visualization True --resume 'regdb_id_bn_relu_lr_1.0e-02_dim_512_whc_0.5_thd_0_pimg_8_ds_l2_md_all_trial_1_best.t' --w_hc 0.5
 
 
 parser = argparse.ArgumentParser(description='PyTorch Cross-Modality Training')
@@ -57,12 +55,6 @@ parser.add_argument('--gall-mode', default='single', type=str, help='single or m
 args = parser.parse_args() 
 os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
 
-# torch.manual_seed(1)
-# torch.cuda.manual_seed(1)
-# torch.cuda.manual_seed_all(1)
-# np.random.seed(1)
-# random.seed(1)
-
 dataset = args.dataset
 if dataset == 'sysu':
     data_path = './data/sysu/'
@@ -81,8 +73,10 @@ if args.visualization:
     num_id_to_draw = 10
 
 print('==> Building model..')
-net = embed_net(args.low_dim, n_class, drop=0.0, arch=args.arch)
+# net = embed_net(args.low_dim, n_class, drop=0.0, arch=args.arch)
 # net = embed_net_debug(args.low_dim, n_class, drop=0.0, arch=args.arch)                # draw pool features
+net = embed_net_rga(args.low_dim, n_class, height=args.img_h, width=args.img_w, pretrained=True, dropout=args.drop, branch_name='rgas')
+
 net.cuda()    
 cudnn.benchmark = True
 
@@ -191,7 +185,7 @@ def draw_rect(img,color_mode):
         cv2.rectangle(img, (x, y), (x+w, y+h), color_mode, 2)
     return img
 
-def draw_retri_images(distmat, save_path, draw_id_list=None, bad_match_ids=None, num_id_to_draw=5, top_k_to_plot=10):
+def draw_retri_images_regdb(distmat, save_path, draw_id_list=None, bad_match_ids=None, num_id_to_draw=5, top_k_to_plot=10):
     num_q = distmat.shape[0]
     
     if draw_id_list is None:
@@ -212,18 +206,18 @@ def draw_retri_images(distmat, save_path, draw_id_list=None, bad_match_ids=None,
     fig=plt.figure(figsize=(8, 8))
     row = len(draw_id_list)
     column = top_k_to_plot+1 
-    for qi, qid in enumerate(draw_id_list):
-        q_img_path = query_img_path[qid]
+    for qi, qidx in enumerate(draw_id_list):
+        q_img_path = query_img_path[qidx]
         q_img = Image.open(q_img_path)
         
         print("------")
-        print("query label, ",query_label[qid])
+        print("query label, ",query_label[qidx])
         
         fig.add_subplot(row,column,qi*(top_k_to_plot+1)+1)
         plt.imshow(q_img)
         plt.axis('off')
         
-        order = indices[qid,:]
+        order = indices[qidx,:]
         top_k_g_labels = gall_label[order][:top_k_to_plot]
         print("gallery labels (top k), ",top_k_g_labels)
         g_img_paths = [gall_img_path[i] for i in order[:top_k_to_plot]]
@@ -231,7 +225,7 @@ def draw_retri_images(distmat, save_path, draw_id_list=None, bad_match_ids=None,
         for gi, g_img_path in enumerate(g_img_paths):
             g_img = Image.open(g_img_path)
             
-            if top_k_g_labels[gi] != query_label[qid]:
+            if top_k_g_labels[gi] != query_label[qidx]:
                 color_mode = (255, 0, 0)            # wrong
             else:
                 color_mode = (0, 255, 0)            # right
@@ -244,6 +238,51 @@ def draw_retri_images(distmat, save_path, draw_id_list=None, bad_match_ids=None,
     plt.savefig(save_path)
     print("save to ",save_path)
 
+def draw_retri_images_sysu(bad_q_labels, bad_g_labels, bad_q_paths, bad_g_paths, save_path, num_id_to_draw=5, top_k_to_plot=10, shuffle_draw=True):
+    
+    if shuffle_draw:
+        if num_id_to_draw < len(bad_q_paths):
+            draw_id_list = np.random.choice(len(bad_q_paths),num_id_to_draw,replace=False)
+    else:
+        draw_id_list = np.arange(num_id_to_draw)
+
+    print("draw_id_list: ",draw_id_list)
+
+    fig=plt.figure(figsize=(50, 50))
+    row = len(draw_id_list)
+    column = top_k_to_plot+1 
+    for qi, qidx in enumerate(draw_id_list):
+        q_img_path = bad_q_paths[qidx]
+        q_img = Image.open(q_img_path)
+        
+        print("------")
+        q_label = bad_q_labels[qidx]
+        print("query label, ",q_label)
+        
+        fig.add_subplot(row,column,qi*(top_k_to_plot+1)+1)
+        plt.imshow(q_img)
+        plt.axis('off')
+
+        top_k_g_labels = bad_g_labels[qidx][:top_k_to_plot]
+        print("gallery labels (top k), ",top_k_g_labels)
+        top_k_g_paths = bad_g_paths[qidx][:top_k_to_plot]
+
+        for gi, g_path in enumerate(top_k_g_paths):
+            g_img = Image.open(g_path)
+            
+            if top_k_g_labels[gi] != q_label:
+                color_mode = (255, 0, 0)            # wrong
+            else:
+                color_mode = (0, 255, 0)            # right
+                print("get one hit!")
+            g_img = draw_rect(g_img, color_mode)
+
+            fig.add_subplot(row,column,qi*(top_k_to_plot+1)+2+gi)
+            plt.imshow(g_img)
+            plt.axis('off')
+
+    plt.savefig(save_path)
+    print("save to ",save_path)
 
 def ReadBadIndex(txt_path):
     with open(txt_path,'r') as f:
@@ -257,8 +296,6 @@ def ReadBadIndex(txt_path):
 query_feat, query_feat_pool = extract_feat(query_loader,nquery,test_mode[1])    
 # query_feat_pool = extract_feat_debug(query_loader,nquery,test_mode[1])  
 
-import pdb;pdb.set_trace()
-
 all_cmc = 0
 all_mAP = 0 
 all_cmc_pool = 0
@@ -270,20 +307,23 @@ if dataset =='regdb':
     
     ##### -------- fc feature 
     distmat = np.matmul(query_feat, np.transpose(gall_feat))
-    cmc, mAP = eval_regdb(-distmat, query_label, gall_label, max_rank=20)
 
     if args.visualization:
         cmc, mAP, bad_match_ids = eval_regdb_debug(-distmat, query_label, gall_label, bad_thre, max_rank=20, write_bad_to_txt=False)
         print("ratio of bad_match_id(top50, thre{}): {}/{}".format(bad_thre,len(bad_match_ids),nquery))  
+        
         # bad_match_ids = None
-        bad_match_ids = ReadBadIndex('same_id_index.txt')
-        bad_match_ids = bad_match_ids[10:20]
-        draw_retri_images(-distmat,draw_id_list=bad_match_ids,bad_match_ids=None,save_path='./result/ts_same_bad_case_10-20.pdf'.format(bad_thre,mAP*100),num_id_to_draw=num_id_to_draw)                    # draw selected bad matches
+        # bad_match_ids = ReadBadIndex('same_id_index.txt')
+        # bad_match_ids = bad_match_ids[10:20]
+
+        draw_retri_images(-distmat,draw_id_list=bad_match_ids,bad_match_ids=None,save_path='./result/{}ts_same_bad_case_10-20.pdf'.format(dataset),num_id_to_draw=num_id_to_draw)                    # draw selected bad matches
 
         # draw_retri_images(-distmat,draw_id_list=bad_match_ids,bad_match_ids=None,save_path='./result/badcase_top50_thre{}_mAP{:.2f}.pdf'.format(bad_thre,mAP*100),num_id_to_draw=num_id_to_draw)                    # draw bad matched queries
         
         # draw_retri_images(-distmat,draw_id_list=None,bad_match_ids=None,save_path='./result/result_rand_nid{}.pdf'.format(num_id_to_draw),num_id_to_draw=num_id_to_draw)                                # draw random queries
-    
+    else:
+        cmc, mAP = eval_regdb(-distmat, query_label, gall_label, max_rank=20)
+
     print("==== Result ====")
     print ('Test Trial: {}'.format(args.trial))
     print('FC: top-1: {:.2%} | top-5: {:.2%} | top-10: {:.2%}| top-20: {:.2%}'.format(
@@ -300,48 +340,56 @@ if dataset =='regdb':
 
     
 elif dataset =='sysu':
-    for trial in range(10):
+    n_trial = 5
+    for trial in range(n_trial):
         gall_img, gall_label, gall_cam = process_gallery_sysu(data_path, mode = args.mode, gall_mode=args.gall_mode)
         
-        trial_gallset = TestData(gall_img, gall_label, transform = transform_test,img_size =(args.img_w,args.img_h))
+        trial_gallset = TestData(gall_img, gall_label, transform = transform_test,img_size=(args.img_w,args.img_h))
         trial_gall_loader  = data.DataLoader(trial_gallset, batch_size=args.test_batch, shuffle=False, num_workers=4)
         
         gall_feat, gall_feat_pool = extract_feat(trial_gall_loader,ngall,test_mode[0])
         
         # fc feature 
         distmat = np.matmul(query_feat, np.transpose(gall_feat))
-        cmc, mAP  = eval_sysu(-distmat, query_label, gall_label,query_cam, gall_cam)
+        if args.visualization:
+            cmc, mAP, bad_match_ids, bad_q_labels, bad_g_labels, bad_q_paths, bad_g_paths = eval_sysu_debug(-distmat, query_label, gall_label, query_cam, gall_cam, query_img_path, gall_img_path, write_bad_to_txt=False)
+
+            draw_retri_images_sysu(bad_q_labels, bad_g_labels,bad_q_paths,bad_g_paths,save_path='./result/{}_badcase_1hitAfter10_mAP{:.2f}_trial{}.pdf'.format(dataset,mAP*100,trial),num_id_to_draw=num_id_to_draw)                    # draw selected bad matches
+        else:
+            cmc, mAP = eval_sysu(-distmat, query_label, gall_label, query_cam, gall_cam)
         
-        # pool5 feature
-        distmat_pool = np.matmul(query_feat_pool, np.transpose(gall_feat_pool))
-        cmc_pool, mAP_pool = eval_sysu(-distmat_pool, query_label, gall_label,query_cam, gall_cam)
-        if trial ==0:
+        ## *********** pool5 feature **********
+        # distmat_pool = np.matmul(query_feat_pool, np.transpose(gall_feat_pool))
+        # cmc_pool, mAP_pool = eval_sysu(-distmat_pool, query_label, gall_label,query_cam, gall_cam)
+        if trial==0:
             all_cmc = cmc
             all_mAP = mAP
-            all_cmc_pool = cmc_pool
-            all_mAP_pool = mAP_pool
+            # all_cmc_pool = cmc_pool
+            # all_mAP_pool = mAP_pool
         else:
-            all_cmc = all_cmc + cmc
-            all_mAP = all_mAP + mAP
-            all_cmc_pool = all_cmc_pool + cmc_pool
-            all_mAP_pool = all_mAP_pool + mAP_pool
+            all_cmc += cmc
+            all_mAP += mAP
+            # all_cmc_pool += cmc_pool
+            # all_mAP_pool += mAP_pool
         
-        print ('Test Trial: {}'.format(trial))
+        print ('*'*10,'Test Trial: {}'.format(trial),'*'*10)
         print('FC: top-1: {:.2%} | top-5: {:.2%} | top-10: {:.2%}| top-20: {:.2%}'.format(
             cmc[0], cmc[4], cmc[9], cmc[19]))
         print('mAP: {:.2%}'.format(mAP))
-        print('POOL5: top-1: {:.2%} | top-5: {:.2%} | top-10: {:.2%}| top-20: {:.2%}'.format(
-            cmc_pool[0], cmc_pool[4], cmc_pool[9], cmc_pool[19]))
-        print('mAP: {:.2%}'.format(mAP_pool))
+        # print('POOL5: top-1: {:.2%} | top-5: {:.2%} | top-10: {:.2%}| top-20: {:.2%}'.format(
+            # cmc_pool[0], cmc_pool[4], cmc_pool[9], cmc_pool[19]))
+        # print('mAP: {:.2%}'.format(mAP_pool))
 
-    cmc = all_cmc /10 
-    mAP = all_mAP /10
 
-    cmc_pool = all_cmc_pool /10 
-    mAP_pool = all_mAP_pool /10
-    print ('All Average:')
+    cmc = all_cmc /n_trial
+    mAP = all_mAP /n_trial
+
+    # cmc_pool = all_cmc_pool /10 
+    # mAP_pool = all_mAP_pool /10
+    print ('*'*10,'All Average:','*'*10)
     print('FC: top-1: {:.2%} | top-5: {:.2%} | top-10: {:.2%}| top-20: {:.2%}'.format(cmc[0], cmc[4], cmc[9], cmc[19]))
     print('mAP: {:.2%}'.format(mAP))
-    print('POOL5: top-1: {:.2%} | top-5: {:.2%} | top-10: {:.2%}| top-20: {:.2%}'.format(
-        cmc_pool[0], cmc_pool[4], cmc_pool[9], cmc_pool[19]))
-    print('mAP: {:.2%}'.format(mAP_pool))
+
+    # print('POOL5: top-1: {:.2%} | top-5: {:.2%} | top-10: {:.2%}| top-20: {:.2%}'.format(
+    #     cmc_pool[0], cmc_pool[4], cmc_pool[9], cmc_pool[19]))
+    # print('mAP: {:.2%}'.format(mAP_pool))

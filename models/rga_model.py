@@ -120,55 +120,25 @@ class ResNet50_RGA_Model(nn.Module):
 class FeatureModule(nn.Module):
     def __init__(self, input_dim, low_dim, class_num, dropout=0.5):
         super(FeatureModule, self).__init__()
-        self.dropout=dropout
+        self.dropout=dropout        
         self.fc = nn.Linear(input_dim, low_dim)
+        
         self.feat_bn = nn.BatchNorm1d(low_dim)
         self.feat_bn.bias.requires_grad_(False)
+        
         if self.dropout > 0:
         	self.drop = nn.Dropout(dropout)
+        
         self.cls = nn.Linear(low_dim, class_num, bias=False)
-
         self.feat_bn.apply(weights_init_kaiming)
 
     def forward(self, x):
-        # feat_ = F.avg_pool2d(x, x.size()[2:]).view(x.size(0), -1)
         feat = self.feat_bn(self.fc(x))
         if self.dropout > 0:
             feat = self.drop(feat)
         cls_feat = self.cls(feat)
         return feat, cls_feat
 
-class FeatureBlock(nn.Module):
-    def __init__(self, input_dim, low_dim):
-        super(FeatureBlock, self).__init__()
-        feat_block = []
-        feat_block += [nn.Linear(input_dim, low_dim)] 
-        feat_block += [nn.BatchNorm1d(low_dim)]
-        
-        feat_block = nn.Sequential(*feat_block)
-        feat_block.apply(weights_init_kaiming)
-        self.feat_block = feat_block
-    def forward(self, x):
-        x = self.feat_block(x)
-        return x
-        
-class ClassBlock(nn.Module):
-    def __init__(self, input_dim, class_num, dropout=0.5, relu=True):
-        super(ClassBlock, self).__init__()
-        classifier = []       
-        if relu:
-            classifier += [nn.LeakyReLU(0.1)]
-        if dropout:
-            classifier += [nn.Dropout(p=dropout)]
-        
-        classifier += [nn.Linear(input_dim, class_num)]
-        classifier = nn.Sequential(*classifier)
-        classifier.apply(weights_init_classifier)
-
-        self.classifier = classifier
-    def forward(self, x):
-        x = self.classifier(x)
-        return x  
 
 
 class thermal_net_resnet(nn.Module):
@@ -201,6 +171,7 @@ class thermal_net_resnet(nn.Module):
         sx = int(sx)
         kx = x.size(2) - sx * (num_part-1)
         kx = int(kx)
+        
         x = nn.functional.avg_pool2d(x, kernel_size=(kx, x.size(3)), stride=(sx, x.size(3)))
         x = x.view(x.size(0), x.size(1), x.size(2))        
         return x
@@ -254,19 +225,6 @@ class embed_net_rga(nn.Module):
         self.classifier5 = FeatureModule(pool_dim, low_dim, class_num, dropout=dropout)
         self.classifier6 = FeatureModule(pool_dim, low_dim, class_num, dropout=dropout)
 
-        # self.feature1 = FeatureBlock(pool_dim, low_dim)
-        # self.feature2 = FeatureBlock(pool_dim, low_dim)
-        # self.feature3 = FeatureBlock(pool_dim, low_dim)
-        # self.feature4 = FeatureBlock(pool_dim, low_dim)
-        # self.feature5 = FeatureBlock(pool_dim, low_dim)
-        # self.feature6 = FeatureBlock(pool_dim, low_dim)
-        # self.classifier1 = ClassBlock(low_dim, class_num, dropout=dropout)
-        # self.classifier2 = ClassBlock(low_dim, class_num, dropout=dropout)
-        # self.classifier3 = ClassBlock(low_dim, class_num, dropout=dropout)
-        # self.classifier4 = ClassBlock(low_dim, class_num, dropout=dropout)
-        # self.classifier5 = ClassBlock(low_dim, class_num, dropout=dropout)
-        # self.classifier6 = ClassBlock(low_dim, class_num, dropout=dropout)
-
         self.l2norm = Normalize(2)
 
     def forward(self, x1, x2, modal=0):
@@ -316,20 +274,6 @@ class embed_net_rga(nn.Module):
             x_3 = x[3].contiguous().view(x[3].size(0), -1)
             x_4 = x[4].contiguous().view(x[4].size(0), -1)
             x_5 = x[5].contiguous().view(x[5].size(0), -1)
-
-        # y_0 = self.feature1(x_0)
-        # y_1 = self.feature2(x_1)
-        # y_2 = self.feature3(x_2)
-        # y_3 = self.feature4(x_3)
-        # y_4 = self.feature5(x_4)
-        # y_5 = self.feature6(x_5)
-
-        # out_0 = self.classifier1(y_0)
-        # out_1 = self.classifier2(y_1)
-        # out_2 = self.classifier3(y_2)
-        # out_3 = self.classifier4(y_3)
-        # out_4 = self.classifier5(y_4)
-        # out_5 = self.classifier6(y_5)
 
         y_0, out_0 = self.classifier1(x_0)
         y_1, out_1 = self.classifier2(x_1)

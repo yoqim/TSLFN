@@ -102,7 +102,7 @@ class visible_net_resnet(nn.Module):
         kx = int(kx)
 
         ## faeture segmentation
-        x = nn.functional.avg_pool2d(x, kernel_size=(kx, x.size(3)), stride=(sx, x.size(3)))        # [batch_size, 2048, 6, 1]
+        x = nn.functional.avg_pool2d(x, kernel_size=(kx, x.size(3)), stride=(sx, x.size(3)))      # [batch_size, 2048, 6, 1]
         x = x.view(x.size(0), x.size(1), x.size(2))
         # x = self.dropout(x)
 
