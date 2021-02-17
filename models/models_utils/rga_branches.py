@@ -171,7 +171,7 @@ class RGA_Branch(nn.Module):
 		# x = self.rga_att2(x)
 		
 		x = self.layer3(x)
-		# x = self.rga_att3(x)
+		x = self.rga_att3(x)
 
 		x = self.layer4(x)
 		x = self.rga_att4(x)

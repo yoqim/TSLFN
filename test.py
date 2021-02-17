@@ -16,6 +16,7 @@ from eval_metrics import eval_sysu, eval_regdb, eval_regdb_debug, eval_sysu_debu
 from models.model import embed_net
 from models.rga_model import embed_net_rga
 # from models.model_debug import embed_net_debug           # vis pool feature distribution on original images
+from models.rga_model_debug import embed_net_rga_debug
 
 from utils import *
 import time 
@@ -28,7 +29,7 @@ parser = argparse.ArgumentParser(description='PyTorch Cross-Modality Training')
 parser.add_argument('--dataset', default='sysu',  help='dataset name: regdb or sysu]')
 parser.add_argument('--arch', default='resnet50', type=str, help='network baseline')
 parser.add_argument('--resume', '-r', default='', type=str, help='resume from checkpoint')
-parser.add_argument('--visualization', '-v', default=False, type=bool, help='visualization retrieval result')
+parser.add_argument('--vis', '-v', action='store_true', help='visualization retrieval result')
 parser.add_argument('--workers', default=4, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
 parser.add_argument('--low-dim', default=512, type=int,
@@ -67,15 +68,17 @@ elif dataset =='regdb':
     
 best_acc = 0  # best test accuracy
 start_epoch = 0 
+print("visualization = ",args.vis)
 
-if args.visualization:
+if args.vis:
     bad_thre = 0.5
     num_id_to_draw = 10
 
 print('==> Building model..')
 # net = embed_net(args.low_dim, n_class, drop=0.0, arch=args.arch)
 # net = embed_net_debug(args.low_dim, n_class, drop=0.0, arch=args.arch)                # draw pool features
-net = embed_net_rga(args.low_dim, n_class, height=args.img_h, width=args.img_w, pretrained=True, dropout=args.drop, branch_name='rgas')
+# net = embed_net_rga(args.low_dim, n_class, height=args.img_h, width=args.img_w, pretrained=True, branch_name='rgas')
+net = embed_net_rga_debug(args.low_dim, n_class, height=args.img_h, width=args.img_w, pretrained=True, branch_name='rgas')
 
 net.cuda()    
 cudnn.benchmark = True
@@ -150,7 +153,6 @@ def extract_feat_debug(data_loader,data_num,forward_mode):
             batch_num = input.size(0)
             input = input.cuda()
             pool_feat = net(input, input, forward_mode)
-
             pool_feats[ptr:ptr+batch_num,: ] = pool_feat.detach().cpu().numpy()
             ptr += batch_num         
     print('Extracting Time:\t {:.3f}'.format(time.time()-start))
@@ -174,16 +176,6 @@ def extract_feat(data_loader,data_num,forward_mode):
     print('Extracting Time:\t {:.3f}'.format(time.time()-start))
     return feats, feat_pools 
 
-def save_feat(numpy_feat,save_path):
-    np.save(save_path,numpy_feat) 
-    print("save to ",save_path)
-
-def draw_rect(img,color_mode):
-    img = np.array(img)
-    rects = [(0, 0, img.shape[1], img.shape[0])]
-    for x, y, w, h in rects:
-        cv2.rectangle(img, (x, y), (x+w, y+h), color_mode, 2)
-    return img
 
 def draw_retri_images_regdb(distmat, save_path, draw_id_list=None, bad_match_ids=None, num_id_to_draw=5, top_k_to_plot=10):
     num_q = distmat.shape[0]
@@ -284,31 +276,29 @@ def draw_retri_images_sysu(bad_q_labels, bad_g_labels, bad_q_paths, bad_g_paths,
     plt.savefig(save_path)
     print("save to ",save_path)
 
-def ReadBadIndex(txt_path):
-    with open(txt_path,'r') as f:
-        lines = f.readlines()
-    lines = lines[0]
-    lines = lines.strip().split()
-    line = [int(i) for i in lines]
 
-    return line
+# query_feat, query_feat_pool = extract_feat(query_loader,nquery,test_mode[1])    
+query_feat_pool = extract_feat_debug(query_loader,nquery,test_mode[1])  
+print(query_feat_pool.shape)
+# import pdb;pdb.set_trace()
 
-query_feat, query_feat_pool = extract_feat(query_loader,nquery,test_mode[1])    
-# query_feat_pool = extract_feat_debug(query_loader,nquery,test_mode[1])  
+# save_feat(query_feat_pool,'regdb_query_feat_rga.npy')
 
 all_cmc = 0
 all_mAP = 0 
 all_cmc_pool = 0
 
 if dataset =='regdb':
-    gall_feat, gall_feat_pool = extract_feat(gall_loader,ngall,test_mode[0])
-    # gall_feat_pool = extract_feat_debug(gall_loader,ngall,test_mode[0])
-    # save_feat(query_feat_pool,'query_feat_pool.npy')
+    # gall_feat, gall_feat_pool = extract_feat(gall_loader,ngall,test_mode[0])
+    gall_feat_pool = extract_feat_debug(gall_loader,ngall,test_mode[0])
+    
+    query_feat = torch.zeros(230,230)
+    gall_feat = torch.zeros(230,230)
     
     ##### -------- fc feature 
     distmat = np.matmul(query_feat, np.transpose(gall_feat))
-
-    if args.visualization:
+    
+    if args.vis:
         cmc, mAP, bad_match_ids = eval_regdb_debug(-distmat, query_label, gall_label, bad_thre, max_rank=20, write_bad_to_txt=False)
         print("ratio of bad_match_id(top50, thre{}): {}/{}".format(bad_thre,len(bad_match_ids),nquery))  
         
@@ -316,11 +306,11 @@ if dataset =='regdb':
         # bad_match_ids = ReadBadIndex('same_id_index.txt')
         # bad_match_ids = bad_match_ids[10:20]
 
-        draw_retri_images(-distmat,draw_id_list=bad_match_ids,bad_match_ids=None,save_path='./result/{}ts_same_bad_case_10-20.pdf'.format(dataset),num_id_to_draw=num_id_to_draw)                    # draw selected bad matches
+        draw_retri_images_regdb(-distmat,draw_id_list=bad_match_ids,bad_match_ids=None,save_path='./result/{}_ts_same_bad_case_10-20.pdf'.format(dataset),num_id_to_draw=num_id_to_draw)     # draw selected bad matches
 
-        # draw_retri_images(-distmat,draw_id_list=bad_match_ids,bad_match_ids=None,save_path='./result/badcase_top50_thre{}_mAP{:.2f}.pdf'.format(bad_thre,mAP*100),num_id_to_draw=num_id_to_draw)                    # draw bad matched queries
+        # draw_retri_images_regdb(-distmat,draw_id_list=bad_match_ids,bad_match_ids=None,save_path='./result/badcase_top50_thre{}_mAP{:.2f}.pdf'.format(bad_thre,mAP*100),num_id_to_draw=num_id_to_draw)     # draw bad matched queries
         
-        # draw_retri_images(-distmat,draw_id_list=None,bad_match_ids=None,save_path='./result/result_rand_nid{}.pdf'.format(num_id_to_draw),num_id_to_draw=num_id_to_draw)                                # draw random queries
+        # draw_retri_images_regdb(-distmat,draw_id_list=None,bad_match_ids=None,save_path='./result/result_rand_nid{}.pdf'.format(num_id_to_draw),num_id_to_draw=num_id_to_draw)                                # draw random queries
     else:
         cmc, mAP = eval_regdb(-distmat, query_label, gall_label, max_rank=20)
 
@@ -351,7 +341,7 @@ elif dataset =='sysu':
         
         # fc feature 
         distmat = np.matmul(query_feat, np.transpose(gall_feat))
-        if args.visualization:
+        if args.vis:
             cmc, mAP, bad_match_ids, bad_q_labels, bad_g_labels, bad_q_paths, bad_g_paths = eval_sysu_debug(-distmat, query_label, gall_label, query_cam, gall_cam, query_img_path, gall_img_path, write_bad_to_txt=False)
 
             draw_retri_images_sysu(bad_q_labels, bad_g_labels,bad_q_paths,bad_g_paths,save_path='./result/{}_badcase_1hitAfter10_mAP{:.2f}_trial{}.pdf'.format(dataset,mAP*100,trial),num_id_to_draw=num_id_to_draw)                    # draw selected bad matches

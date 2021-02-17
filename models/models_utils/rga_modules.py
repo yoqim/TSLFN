@@ -46,7 +46,7 @@ class RGA_Module(nn.Module):
 		# Embedding functions for relation features
 		if self.use_spatial:
 			self.gg_spatial = nn.Sequential(
-				nn.Conv2d(in_channels=self.in_spatial * 2, out_channels=self.inter_spatial,
+				nn.Conv2d(in_channels=self.in_spatial*2, out_channels=self.inter_spatial,
 						kernel_size=1, stride=1, padding=0, bias=False),
 				nn.BatchNorm2d(self.inter_spatial),
 				nn.ReLU()

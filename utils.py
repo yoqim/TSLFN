@@ -1,9 +1,9 @@
-import os
+import os,sys,cv2
 from collections import defaultdict
 import numbers
 import numpy as np
 from torch.utils.data.sampler import Sampler
-import sys
+
 import os.path as osp
 import scipy.io as scio
 
@@ -90,6 +90,7 @@ def mkdir_if_missing(directory):
         except OSError as e:
             if e.errno != errno.EEXIST:
                 raise   
+
 class Logger(object):
     """
     Write console output to external text file.
@@ -127,3 +128,24 @@ class Logger(object):
         if self.file is not None:
             self.file.close()
             
+
+########### for test ########### 
+def save_feat(numpy_feat,save_path):
+    np.save(save_path,numpy_feat) 
+    print("save to ",save_path)
+
+def draw_rect(img,color_mode):
+    img = np.array(img)
+    rects = [(0, 0, img.shape[1], img.shape[0])]
+    for x, y, w, h in rects:
+        cv2.rectangle(img, (x, y), (x+w, y+h), color_mode, 2)
+    return img
+
+def ReadBadIndex(txt_path):
+    with open(txt_path,'r') as f:
+        lines = f.readlines()
+    lines = lines[0]
+    lines = lines.strip().split()
+    line = [int(i) for i in lines]
+
+    return line

@@ -68,11 +68,11 @@ parser.add_argument('--dist-type', default='l2', type=str,
                     help='type of distance')
 
 
-# torch.manual_seed(1)
-# torch.cuda.manual_seed(1)
-# torch.cuda.manual_seed_all(1)
-# np.random.seed(1)
-# random.seed(1)
+torch.manual_seed(1)
+torch.cuda.manual_seed(1)
+torch.cuda.manual_seed_all(1)
+np.random.seed(1)
+random.seed(1)
 
 def worker_init_fn(worker_id):
     # After creating the workers, each worker has an independent seed that is initialized to the curent random seed + the id of the worker
@@ -114,7 +114,7 @@ if not args.optim == 'sgd':
 if dataset =='regdb':
     suffix = suffix + '_trial_{}'.format(args.trial)
 
-suffix += '_RGA_att4'
+suffix += '_RGAs_att34'
 
 test_log_file = open(log_path + suffix + '.txt', "w")
 sys.stdout = Logger(log_path  + suffix + '_os.txt')
@@ -146,6 +146,7 @@ transform_test = transforms.Compose([
 
 end = time.time()
 if dataset =='sysu':
+    loss_print_interval = 100
     # training set
     trainset = SYSUData(data_path,  transform=transform_train)
     # generate the idx of each person identity
@@ -156,6 +157,7 @@ if dataset =='sysu':
     gall_img_path, gall_label, gall_cam = process_gallery_sysu(data_path, mode = args.mode)
       
 elif dataset =='regdb':
+    loss_print_interval = 20
     # training set
     trainset = RegDBData(data_path, args.trial, transform=transform_train)
     # generate the idx of each person identity
@@ -427,7 +429,9 @@ def train(epoch, loss_log):
 
         batch_time.update(time.time() - end)
         end = time.time()
-        if batch_idx%10 ==0:
+        if batch_idx % loss_print_interval ==0:
+            print("=> ID loss {:.2f}".format(loss0-w_hc*loss_c0))
+            print("=> HC loss {:.2f}".format(loss_c0))
             print('Epoch: [{}][{}/{}] '
                   'Time: {batch_time.val:.3f} ({batch_time.avg:.3f}) '
                   'Data: {data_time.val:.3f} ({data_time.avg:.3f}) '

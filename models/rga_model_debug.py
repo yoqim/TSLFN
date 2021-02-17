@@ -103,6 +103,7 @@ class thermal_net_resnet(nn.Module):
 
     def forward(self, x):
         x = self.thermal(x)
+        ori_x = x.clone()
 
         num_part = 6 # number of part
         # pool size
@@ -112,8 +113,11 @@ class thermal_net_resnet(nn.Module):
         kx = int(kx)
         
         x = nn.functional.avg_pool2d(x, kernel_size=(kx, x.size(3)), stride=(sx, x.size(3)))
-        x = x.view(x.size(0), x.size(1), x.size(2))        
-        return x
+        x = x.view(x.size(0), x.size(1), x.size(2))    
+
+        print("thermal_net_resnet, ",ori_x.shape)
+
+        return x,ori_x
 
 
 class visible_net_resnet(nn.Module):
@@ -137,6 +141,7 @@ class visible_net_resnet(nn.Module):
 
     def forward(self, x):
         x = self.visible(x)
+        ori_x = x.clone()
 
         num_part = 6 # number of part
         # pool size
@@ -145,13 +150,14 @@ class visible_net_resnet(nn.Module):
         kx = x.size(2) - sx * (num_part-1)
         kx = int(kx)
         x = nn.functional.avg_pool2d(x, kernel_size=(kx, x.size(3)), stride=(sx, x.size(3)))
-        x = x.view(x.size(0), x.size(1), x.size(2))                 
-        return x
+        x = x.view(x.size(0), x.size(1), x.size(2))    
+
+        return x, ori_x
 
 
-class embed_net_rga(nn.Module):
+class embed_net_rga_debug(nn.Module):
     def __init__(self, low_dim, class_num, height, width, pretrained=True, dropout=0.0, branch_name='rgasc'):
-        super(embed_net_rga, self).__init__()
+        super(embed_net_rga_debug, self).__init__()
 
         pool_dim = 2048
         self.visible_net = visible_net_resnet(pretrained, pool_dim, height, width, dropout=dropout, num_classes=class_num, branch_name=branch_name)
@@ -168,7 +174,7 @@ class embed_net_rga(nn.Module):
 
     def forward(self, x1, x2, modal=0):
         if modal==0:
-            x1 = self.visible_net(x1)
+            x1,vis_x1 = self.visible_net(x1)
             x1 = x1.chunk(6, 2)          # 沿2轴分成6块
 
             x1_0 = x1[0].contiguous().view(x1[0].size(0), -1)
@@ -178,7 +184,7 @@ class embed_net_rga(nn.Module):
             x1_4 = x1[4].contiguous().view(x1[4].size(0), -1)
             x1_5 = x1[5].contiguous().view(x1[5].size(0), -1)
             
-            x2 = self.thermal_net(x2)
+            x2,vis_x2 = self.thermal_net(x2)
             x2 = x2.chunk(6, 2)
             x2_0 = x2[0].contiguous().view(x2[0].size(0), -1)
             x2_1 = x2[1].contiguous().view(x2[1].size(0), -1)
@@ -195,7 +201,8 @@ class embed_net_rga(nn.Module):
             x_5 = torch.cat((x1_5, x2_5), 0)
         
         elif modal ==1:
-            x = self.visible_net(x1)
+            x, vis_x = self.visible_net(x1)
+
             x = x.chunk(6,2)
             x_0 = x[0].contiguous().view(x[0].size(0),-1)
             x_1 = x[1].contiguous().view(x[1].size(0), -1)
@@ -205,7 +212,8 @@ class embed_net_rga(nn.Module):
             x_5 = x[5].contiguous().view(x[5].size(0), -1)
         
         elif modal==2:
-            x = self.thermal_net(x2)
+            x,vis_x = self.thermal_net(x2)
+
             x = x.chunk(6, 2)
             x_0 = x[0].contiguous().view(x[0].size(0), -1)
             x_1 = x[1].contiguous().view(x[1].size(0), -1)
@@ -239,4 +247,5 @@ class embed_net_rga(nn.Module):
             y_4 = self.l2norm(y_4)
             y_5 = self.l2norm(y_5)
             y = torch.cat((y_0, y_1, y_2, y_3, y_4, y_5), 1)            #(batch_size, low_dim*6)
-            return x, y
+
+            return vis_x
