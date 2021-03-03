@@ -202,6 +202,7 @@ class embed_net(nn.Module):
             x_3 = torch.cat((x1_3, x2_3), 0)
             x_4 = torch.cat((x1_4, x2_4), 0)
             x_5 = torch.cat((x1_5, x2_5), 0)
+            
         elif modal ==1:
             x = self.visible_net(x1)
             x = x.chunk(6,2)

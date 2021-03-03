@@ -9,7 +9,7 @@ import scipy.io as scio
 
 
 
-def GenIdx( train_color_label, train_thermal_label):
+def GenIdx(train_color_label, train_thermal_label):
     color_pos = []
     unique_label_color = np.unique(train_color_label)
     for i in range(len(unique_label_color)):
@@ -127,7 +127,8 @@ class Logger(object):
         self.console.close()
         if self.file is not None:
             self.file.close()
-            
+        
+
 
 ########### for test ########### 
 def save_feat(numpy_feat,save_path):

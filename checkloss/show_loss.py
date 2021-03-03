@@ -34,8 +34,6 @@ def show_loss(lossfile,iter_interval,statistic_interval,lineset,save_name):
     statistic_res_mean = np.zeros(statistic_len)
     statistic_res_var = np.zeros(statistic_len)
 
-    print(statistic_idx)
-    import pdb;pdb.set_trace()
     for idx in range(statistic_len) :
         loss_start_idx = idx*statistic_interval
         loss_end_idx = min(loss_start_idx + statistic_interval, loss_num)
@@ -56,7 +54,8 @@ def show_loss(lossfile,iter_interval,statistic_interval,lineset,save_name):
     plt.show()
     print("save to ",save_name)
 
-# python show_loss.py --name ../log/regdb_log/RGA_att34.png
+# python show_loss.py --name ../log/sysu_log/sysu_RGA_att34.png
+# python show_loss.py --name ../log/regdb_log/regdb_RGA_att34.png
 args = parse_args()
 save_name = args.name
 

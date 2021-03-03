@@ -1,7 +1,7 @@
 import numpy as np
 from torch import nn, tensor
 import torch
-from torch.autograd import Variable
+
 
 class hetero_loss(nn.Module):
 	def __init__(self, margin=0.1, dist_type = 'l2'):

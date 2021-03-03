@@ -16,8 +16,8 @@ from models.rga_model import embed_net_rga
 from utils import *
 import Transform as transforms
 from heterogeneity_loss import hetero_loss
+from triplet_loss import OriTripletLoss
 import xlwt,xlrd
-from torch.backends import cudnn
 
 
 parser = argparse.ArgumentParser(description='PyTorch Cross-Modality Training')
@@ -92,7 +92,7 @@ elif dataset =='regdb':
     log_path = args.log_path + 'regdb_log/'
     test_mode = [2, 1]                          # visible to thermal
 
-checkpoint_path = args.model_path
+checkpoint_path = args.model_path + args.dataset + '/'
 
 if not os.path.isdir(log_path):
     os.makedirs(log_path)
@@ -102,11 +102,6 @@ if not os.path.isdir(checkpoint_path):
 if args.method =='id':
     suffix = dataset + '_id_bn_relu'
 suffix = suffix + '_lr_{:1.1e}'.format(args.lr) 
-suffix = suffix + '_dim_{}'.format(args.low_dim)
-suffix = suffix + '_whc_{}'.format(args.w_hc)
-suffix = suffix + '_thd_{}'.format(args.thd)
-suffix = suffix + '_pimg_{}'.format(args.per_img)
-suffix = suffix + '_ds_{}'.format(args.dist_type)
 suffix = suffix + '_md_{}'.format(args.mode)
 
 if not args.optim == 'sgd':
@@ -114,10 +109,11 @@ if not args.optim == 'sgd':
 if dataset =='regdb':
     suffix = suffix + '_trial_{}'.format(args.trial)
 
-suffix += '_RGAs_att34'
+suffix += 'RGBs_4_wclsbias'
+# suffix += '_wclsbias'                       
 
 test_log_file = open(log_path + suffix + '.txt', "w")
-sys.stdout = Logger(log_path  + suffix + '_os.txt')
+sys.stdout = Logger(log_path + suffix + '_os.txt')
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 best_acc = 0  # best test accuracy
@@ -129,7 +125,6 @@ print('==> Loading data..')
 normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],std=[0.229, 0.224, 0.225])
 transform_train = transforms.Compose([
     transforms.ToPILImage(),
-    #transforms.Pad(10),
     transforms.RectScale(args.img_h, args.img_w),
     transforms.RandomCrop((args.img_h,args.img_w)),
     transforms.RandomHorizontalFlip(),
@@ -138,7 +133,6 @@ transform_train = transforms.Compose([
 ])
 transform_test = transforms.Compose([
     transforms.ToPILImage(),
-    #transforms.Resize((args.img_h,args.img_w)),
     transforms.RectScale(args.img_h, args.img_w),
     transforms.ToTensor(),
     normalize,
@@ -178,7 +172,7 @@ n_class = len(np.unique(trainset.train_color_label))
 nquery = len(query_label)
 ngall = len(gall_label)
 
-print('Dataset {} statistics:'.format(dataset))
+print('  Dataset {} statistics:'.format(dataset))
 print('  ------------------------------')
 print('  subset   | # ids | # images')
 print('  ------------------------------')
@@ -188,16 +182,14 @@ print('  ------------------------------')
 print('  query    | {:5d} | {:8d}'.format(len(np.unique(query_label)), nquery))
 print('  gallery  | {:5d} | {:8d}'.format(len(np.unique(gall_label)), ngall))
 print('  ------------------------------')   
-print('Data Loading Time:\t {:.3f}'.format(time.time()-end))
+print('  Data Loading Time:\t {:.3f}'.format(time.time()-end))
 
-print('==> Building model..')
+print('==> Building model...')
 # net = embed_net(args.low_dim, n_class, drop=args.drop, arch=args.arch)
-
 net = embed_net_rga(args.low_dim, n_class, height=args.img_h, width=args.img_w, pretrained=True, dropout=args.drop, branch_name='rgas')
 
 net.to(device)
-cudnn.benckmark = True
-cudnn.deterministic = True
+cudnn.benchmark = True
 
 if len(args.resume)>0:   
     model_path = checkpoint_path + args.resume
@@ -205,6 +197,7 @@ if len(args.resume)>0:
         print('==> loading checkpoint {}'.format(args.resume))
         checkpoint = torch.load(model_path)
         start_epoch = checkpoint['epoch']
+        best_mAP = checkpoint['mAP']
         net.load_state_dict(checkpoint['net'])
         print('==> loaded checkpoint {} (epoch {})'
               .format(args.resume, checkpoint['epoch']))
@@ -214,9 +207,12 @@ if len(args.resume)>0:
 if args.method =='id':
     thd = args.thd
     criterion = nn.CrossEntropyLoss()
-    criterion.to(device)
     criterion_het = hetero_loss(margin=thd, dist_type=args.dist_type)
+    # criterion_tri = OriTripletLoss(margin=0.3)
+
+    criterion.to(device)
     criterion_het.to(device)
+    # criterion_tri.to(device)
 
 ## setting different lr to baseline / classifiers
 def set_ignored_params(net):
@@ -299,8 +295,9 @@ optimizer = set_optimizer_rga(args.optim, net, base_params)
 
 def adjust_learning_rate_rga(optimizer, epoch, change_epoch=[30,60]):
     """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
-
-    if epoch < change_epoch[0]:
+    if epoch < 10:
+        lr = args.lr * (epoch + 1) / 10
+    elif epoch < change_epoch[0]:
         lr = args.lr
     elif epoch >= change_epoch[0] and epoch < change_epoch[1]:
         lr = args.lr * 0.1
@@ -364,9 +361,9 @@ def extract_feat(data_loader,data_num,forward_mode):
     print('Extracting Time:\t {:.3f}'.format(time.time()-start))
     return feats 
 
-def train(epoch, loss_log):
+def train(epoch):
     # current_lr = adjust_learning_rate(optimizer, epoch)
-    current_lr = adjust_learning_rate_rga(optimizer, epoch, change_epoch=[300,500])
+    current_lr = adjust_learning_rate_rga(optimizer, epoch, change_epoch=[40,80])
     train_loss = AverageMeter()
     data_time = AverageMeter()
     batch_time = AverageMeter()
@@ -385,7 +382,11 @@ def train(epoch, loss_log):
 
         data_time.update(time.time() - end)
         
-        outputs, feat = net(input1, input2) # outputs: classifier outputs -> id loss ; feat: feature after l2norm -> hc loss
+        x_pool, outputs, feat = net(input1, input2) # outputs: classifier outputs -> id loss ; feat: feature after l2norm -> hc loss ; rga net
+        # outputs, feat = net(input1, input2) # for original net
+        
+        # loss_tri, _ = criterion_tri(x_pool, labels)  
+    
         if args.method =='id':
             loss0 = criterion(outputs[0], labels)
             loss1 = criterion(outputs[1], labels)
@@ -413,13 +414,14 @@ def train(epoch, loss_log):
             loss3 = loss3 + w_hc * loss_c3
             loss4 = loss4 + w_hc * loss_c4
             loss5 = loss5 + w_hc * loss_c5
-            
+
             cc = 0
             for ss in range(6):
                 acc=eval("CalAccurate(outputs[{}],labels)".format(ss))
                 cc += acc
             correct+=cc/6
         
+        # loss = loss0 + loss1 + loss2 + loss3 + loss4 + loss5 + loss_tri
         loss = loss0 + loss1 + loss2 + loss3 + loss4 + loss5
         optimizer.zero_grad()
         loss.backward()
@@ -429,22 +431,20 @@ def train(epoch, loss_log):
 
         batch_time.update(time.time() - end)
         end = time.time()
-        if batch_idx % loss_print_interval ==0:
+        if batch_idx % loss_print_interval==0:
             print("=> ID loss {:.2f}".format(loss0-w_hc*loss_c0))
             print("=> HC loss {:.2f}".format(loss_c0))
+            # print("=> Triplet loss {:.2f}".format(loss_tri))
             print('Epoch: [{}][{}/{}] '
                   'Time: {batch_time.val:.3f} ({batch_time.avg:.3f}) '
                   'Data: {data_time.val:.3f} ({data_time.avg:.3f}) '
-                  'lr:{} '
+                  'lr:{:1.1e} '
                   'Loss: {train_loss.val:.4f} ({train_loss.avg:.4f}) '
                   'Accu: {:.2f}%' .format(
                   epoch, batch_idx, len(trainloader), current_lr, 
                   100.*correct/len(trainloader), batch_time=batch_time, 
                   data_time=data_time, train_loss=train_loss))
-        #num_batch = num_batch + 1
-    #epoch_loss = epoch_loss / num_batch
-    #loss_log.append(epoch_loss)
-    
+
 
 def test(epoch):   
     gall_feat = extract_feat(gall_loader,ngall,test_mode[0])
@@ -465,7 +465,7 @@ print('==> Start Training...')
 per_img = args.per_img
 per_id = args.batch_size / per_img
 w_hc = args.w_hc
-loss_log = []
+
 for epoch in range(start_epoch, args.epochs+1-start_epoch):
     print('==> Preparing Data Loader...')
     # identity sampler
@@ -476,7 +476,7 @@ for epoch in range(start_epoch, args.epochs+1-start_epoch):
     trainloader = data.DataLoader(trainset, batch_size=args.batch_size,\
         sampler = sampler, num_workers=args.workers, drop_last =True)
     
-    train(epoch, loss_log)
+    train(epoch)
 
     if epoch > 0 and epoch%2==0:
         print ('Test Epoch: {}'.format(epoch))
@@ -502,11 +502,11 @@ for epoch in range(start_epoch, args.epochs+1-start_epoch):
 
 
         # save model every 20 epochs    
-        if epoch > 10 and epoch%args.save_epoch ==0:
-            state = {
-                'net': net.state_dict(),
-                'cmc': cmc,
-                'mAP': mAP,
-                'epoch': epoch,
-            }
-            torch.save(state, checkpoint_path + suffix + '_epoch_{}.t'.format(epoch))
+        # if epoch > 10 and epoch%args.save_epoch ==0:
+        #     state = {
+        #         'net': net.state_dict(),
+        #         'cmc': cmc,
+        #         'mAP': mAP,
+        #         'epoch': epoch,
+        #     }
+        #     torch.save(state, checkpoint_path + suffix + '_epoch_{}.t'.format(epoch))
