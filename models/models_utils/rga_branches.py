@@ -195,7 +195,10 @@ class RGA_Branch_Simple(nn.Module):
         model.avgpool = nn.AdaptiveAvgPool2d((1,1))
         self.model = model
 
-        self.rga_att = RGA_Module(2048, (height//16)*(width//16), use_spatial=spa_on, use_channel=cha_on,
+        self.rga_att3 = RGA_Module(1024, (height//16)*(width//16), use_spatial=spa_on, use_channel=cha_on,
+                                cha_ratio=c_ratio, spa_ratio=s_ratio, down_ratio=d_ratio)
+
+        self.rga_att4 = RGA_Module(2048, (height//16)*(width//16), use_spatial=spa_on, use_channel=cha_on,
                                 cha_ratio=c_ratio, spa_ratio=s_ratio, down_ratio=d_ratio)
 
 
@@ -208,42 +211,12 @@ class RGA_Branch_Simple(nn.Module):
         x = self.model.layer1(x)
         x = self.model.layer2(x)
         x = self.model.layer3(x)
-        x = self.model.layer4(x)
+        att_x3 = self.rga_att3(x)
+        x = x + att_x3
 
-        x = self.rga_att(x)
+        x = self.model.layer4(x)
+        att_x4 = self.rga_att4(x)
+        x = x + att_x4
 
         return x        
 
-
-'''
-class Chan_Att(nn.Module):
-    def __init__(self, pretrained=True, spa_on=False, cha_on=False, s_ratio=8, c_ratio=8, d_ratio=8, height=256, width=128):
-        super(Chan_Att, self).__init__()
-
-        self.in_channels = 64
-        model = models.resnet50(pretrained=pretrained)
-
-        for mo in model.layer4[0].modules():
-            if isinstance(mo, nn.Conv2d):
-                mo.stride = (1, 1)
-        
-        model.avgpool = nn.AdaptiveAvgPool2d((1,1))
-        self.model = model
-
-
-    def forward(self, x):
-        x = self.model.conv1(x)
-        x = self.model.bn1(x)
-        x = self.model.relu(x)
-        x = self.model.maxpool(x)
-
-        x = self.model.layer1(x)
-        x = self.model.layer2(x)
-        x = self.model.layer3(x)
-        x = self.model.layer4(x)
-
-        # x = self.att(x)
-
-        return x  
-
-'''

@@ -11,8 +11,11 @@ import torch.utils.data as data
 from data_loader import SYSUData, RegDBData, TestData
 from data_manager import *
 from eval_metrics import eval_sysu, eval_regdb
+
 from models.model import embed_net
 from models.rga_model import embed_net_rga
+from models.shared_model import embed_net_shared
+
 from utils import *
 import Transform as transforms
 from heterogeneity_loss import hetero_loss
@@ -63,10 +66,11 @@ parser.add_argument('--w_hc', default=0.5, type=float,
 parser.add_argument('--thd', default=0, type=float,
                     help='threshold of Hetero-Center Loss')
 parser.add_argument('--epochs', default=500, type=int,
-                    help='weight of Hetero-Center Loss')
+                    help='overall epochs')
 parser.add_argument('--dist-type', default='l2', type=str,
                     help='type of distance')
-
+parser.add_argument('--share_net', default=4, type=int,
+                    metavar='share', help='[1,2,3,4,5] the start number of shared network in the two-stream networks')
 
 torch.manual_seed(1)
 torch.cuda.manual_seed(1)
@@ -109,8 +113,8 @@ if not args.optim == 'sgd':
 if dataset =='regdb':
     suffix = suffix + '_trial_{}'.format(args.trial)
 
-suffix += 'RGBs_4_wclsbias'
-# suffix += '_wclsbias'                       
+# suffix += '_RGBs_34_resatt'                     
+suffix += '_sharenet{}'.format(args.share_net)                     
 
 test_log_file = open(log_path + suffix + '.txt', "w")
 sys.stdout = Logger(log_path + suffix + '_os.txt')
@@ -142,7 +146,7 @@ end = time.time()
 if dataset =='sysu':
     loss_print_interval = 100
     # training set
-    trainset = SYSUData(data_path,  transform=transform_train)
+    trainset = SYSUData(data_path, transform=transform_train)
     # generate the idx of each person identity
     color_pos, thermal_pos = GenIdx(trainset.train_color_label, trainset.train_thermal_label)
     
@@ -165,7 +169,7 @@ gallset = TestData(gall_img_path, gall_label, transform = transform_test, img_si
 queryset = TestData(query_img_path, query_label, transform = transform_test, img_size =(args.img_w,args.img_h))
     
 # testing data loader
-gall_loader  = data.DataLoader(gallset, batch_size=args.test_batch, shuffle=False, num_workers=args.workers, worker_init_fn=worker_init_fn)
+gall_loader = data.DataLoader(gallset, batch_size=args.test_batch, shuffle=False, num_workers=args.workers, worker_init_fn=worker_init_fn)
 query_loader = data.DataLoader(queryset, batch_size=args.test_batch, shuffle=False, num_workers=args.workers, worker_init_fn=worker_init_fn)
    
 n_class = len(np.unique(trainset.train_color_label))
@@ -186,7 +190,8 @@ print('  Data Loading Time:\t {:.3f}'.format(time.time()-end))
 
 print('==> Building model...')
 # net = embed_net(args.low_dim, n_class, drop=args.drop, arch=args.arch)
-net = embed_net_rga(args.low_dim, n_class, height=args.img_h, width=args.img_w, pretrained=True, dropout=args.drop, branch_name='rgas')
+# net = embed_net_rga(args.low_dim, n_class, height=args.img_h, width=args.img_w, pretrained=True, dropout=args.drop, branch_name='rgas')
+net = embed_net_shared(args.low_dim, n_class, height=args.img_h, width=args.img_w,share_net=args.share_net,dropout=args.drop)
 
 net.to(device)
 cudnn.benchmark = True
@@ -363,7 +368,7 @@ def extract_feat(data_loader,data_num,forward_mode):
 
 def train(epoch):
     # current_lr = adjust_learning_rate(optimizer, epoch)
-    current_lr = adjust_learning_rate_rga(optimizer, epoch, change_epoch=[40,80])
+    current_lr = adjust_learning_rate_rga(optimizer, epoch, change_epoch=[80,120])
     train_loss = AverageMeter()
     data_time = AverageMeter()
     batch_time = AverageMeter()

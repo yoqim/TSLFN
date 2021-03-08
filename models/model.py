@@ -67,7 +67,7 @@ class ClassBlock(nn.Module):
         x = self.classifier(x)
         return x       
 
-# Define the ResNet18-based Model
+
 class visible_net_resnet(nn.Module):
     def __init__(self, arch ='resnet18'):
         super(visible_net_resnet, self).__init__()

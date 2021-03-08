@@ -13,13 +13,12 @@ def process_query_sysu(data_path, mode = 'all', relabel=False):
     data_path = '../IVReIDData/SYSU-MM01/'
     file_path = os.path.join(data_path,'exp/test_id.txt')
 
-    files_ir = []
-
     with open(file_path, 'r') as file:
         ids = file.read().splitlines()
         ids = [int(y) for y in ids[0].split(',')]
         ids = ["%04d" % x for x in ids]
-
+    
+    files_ir = []
     for id in sorted(ids):
         for cam in ir_cameras:
             img_dir = os.path.join(data_path,cam,id)

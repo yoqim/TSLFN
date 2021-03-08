@@ -8,7 +8,7 @@ import torch.utils.data as data
 
 
 class SYSUData(data.Dataset):
-    def __init__(self, data_dir,  transform=None, colorIndex = None, thermalIndex = None):
+    def __init__(self, data_dir,  transform=None, colorIndex=None, thermalIndex=None):
         
         # Load training images (path) and labels
         train_color_image = np.load(data_dir + 'train_rgb_resized_img.npy')
@@ -18,7 +18,7 @@ class SYSUData(data.Dataset):
         self.train_thermal_label = np.load(data_dir + 'train_ir_resized_label.npy')
         
         # RGB format
-        self.train_color_image   = train_color_image
+        self.train_color_image = train_color_image
         self.train_thermal_image = train_thermal_image
         self.transform = transform
         self.cIndex = colorIndex

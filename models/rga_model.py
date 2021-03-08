@@ -266,3 +266,7 @@ class embed_net_rga(nn.Module):
             y_5 = self.l2norm(y_5)
             y = torch.cat((y_0, y_1, y_2, y_3, y_4, y_5), 1)            #(batch_size, low_dim*6)
             return x, y
+
+
+
+
