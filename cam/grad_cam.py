@@ -7,30 +7,35 @@ from torch.nn import functional as F
 class _BaseWrapper(object):
     def __init__(self, model, forward_mode):
         super(_BaseWrapper, self).__init__()
-        self.device = 'cuda'
         self.model = model
         self.forward_mode = forward_mode
         self.handlers = []  # a set of hook function handlers
 
     def _encode_one_hot(self, ids):
-        one_hot = torch.zeros_like(self.logits).to(self.device)
+        one_hot = torch.zeros_like(self.logits[0]).cuda()
         one_hot.scatter_(1, ids, 1.0)
         return one_hot
 
     def forward(self, image):
         self.image_shape = image.shape[2:]
 
-        _,_,self.logits = self.model(image,image,self.forward_mode)  # [1,num_classes]
-        self.probs = F.softmax(self.logits, dim=1)
-        return self.probs.sort(dim=1, descending=True)               # ordered results
+        _,_,self.logits = self.model(image,image,self.forward_mode)         # [num_imgs, num_classes]
 
-    def backward(self, ids):
+        sorted_logits = []
+        for lo in self.logits:
+            logits = F.softmax(lo, dim=1)
+            tmp = logits.sort(dim=1, descending=True)
+            sorted_logits.append(tmp[1])
+        
+        return sorted_logits              # ordered results
+
+    def backward(self, ids, n_fea):
         """
         Class-specific backpropagation
         """
         one_hot = self._encode_one_hot(ids)
         self.model.zero_grad()
-        self.logits.backward(gradient=one_hot, retain_graph=True)
+        self.logits[n_fea].backward(gradient=one_hot,retain_graph=True)
 
     def generate(self):
         raise NotImplementedError
@@ -66,16 +71,15 @@ class GradCAM(_BaseWrapper):
         def backward_hook(module, grad_in, grad_out):
             self.grads.append(grad_out[0].detach())
 
-
         for name, module in self.model.named_modules():
             if self.target_layer is None or name in self.target_layer:
                 self.handlers.append(module.register_forward_hook(forward_hook))
                 self.handlers.append(module.register_backward_hook(backward_hook))
     
 
-    def generate(self, target_layer):
+    def generate(self, n_fea):
         fmaps = self.fmaps[0]
-        grads = self.grads[0]
+        grads = self.grads[n_fea]
         weights = F.adaptive_avg_pool2d(grads, 1)
 
         gcam = torch.mul(fmaps, weights).sum(dim=1, keepdim=True)

@@ -143,13 +143,13 @@ end = time.time()
 if dataset =='sysu':
     loss_print_interval = 100
     # training set
-    trainset = SYSUData(data_path, transform=transform_train)
+    trainset = SYSUData('../IVReIDData/SYSU-MM01/', transform=transform_train)
     # generate the idx of each person identity
     color_pos, thermal_pos = GenIdx(trainset.train_color_label, trainset.train_thermal_label)
     
     # testing set
-    query_img_path, query_label, query_cam = process_query_sysu(data_path, mode = args.mode)
-    gall_img_path, gall_label, gall_cam = process_gallery_sysu(data_path, mode = args.mode)
+    query_img_path, query_label, query_cam = process_query_sysu('../IVReIDData/SYSU-MM01/', mode = args.mode)
+    gall_img_path, gall_label, gall_cam = process_gallery_sysu('../IVReIDData/SYSU-MM01/', mode = args.mode)
       
 elif dataset =='regdb':
     loss_print_interval = 20
@@ -282,7 +282,7 @@ def extract_feat(data_loader,data_num,forward_mode):
     return feats 
 
 def train(epoch):
-    current_lr = adjust_learning_rate(optimizer, epoch, change_epoch=[40,80])
+    current_lr = adjust_learning_rate(optimizer, epoch, change_epoch=[60,90])
     train_loss = AverageMeter()
     data_time = AverageMeter()
     batch_time = AverageMeter()
@@ -342,7 +342,7 @@ def train(epoch):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        
+
         train_loss.update(loss.item(), 2*input1.size(0))
 
         batch_time.update(time.time() - end)

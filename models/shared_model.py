@@ -162,8 +162,8 @@ class base_resnet(nn.Module):
                 for i in range(self.share_net, 5):
                     setattr(self.base,'layer'+str(i), getattr(model_base,'layer'+str(i)))
 
-        self.rga = RGA_Module(2048, (height//16)*(width//16), use_spatial=spa_on, use_channel=cha_on,
-                                cha_ratio=scale, spa_ratio=scale, down_ratio=d_scale)
+        # self.rga = RGA_Module(2048, (height//16)*(width//16), use_spatial=spa_on, use_channel=cha_on,
+        #                         cha_ratio=scale, spa_ratio=scale, down_ratio=d_scale)
 
 
     def forward(self, x):
@@ -184,8 +184,8 @@ class base_resnet(nn.Module):
             for i in range(self.share_net, 5):
                 x = getattr(self.base, 'layer'+str(i))(x)
         
-        att_x = self.rga(x)
-        x = x+att_x
+        # att_x = self.rga(x)
+        # x = x+att_x
 
         return x
 
@@ -415,71 +415,7 @@ class embed_net_mulcla(nn.Module):
             exec('chunk_feat.append(fmout[{}].contiguous().view(fmout[{}].size(0), -1))'.format(i,i))
         return chunk_feat
 
-    def _cam_att(self, pooled_feats, labels):
-        '''
-        : enhance pooled_feat with cam att
-        feats: (2*b,c,h,w) ... Feature maps after backbone
-        labels: (2*b,1)    ... Actual id labels
-        '''
-        # 1. Channel-wise self-attention
-        bs, c = pooled_feats.shape[:2]
-        feats = pooled_feats
-        relu_feats = F.relu(feats)          # why relu?
-
-        feats = feats.unsqueeze(1)
-        relu_feats = relu_feats.unsqueeze(2)
-
-        print("feats.shape, ",feats.shape)
-        print("relu_feats.shape, ",relu_feats.shape)
-        import pdb;pdb.set_trace()
-
-        # bs x c x c x h x w
-        att_feats = feats*relu_feats      # check if each group has the same feat maps?
-        print("att_feats.shape, ",att_feats.shape)
-        print(att_feats[0,0,1,:5,:5])
-        print(att_feats[0,0,2,:5,:5])
-        print(att_feats[0,0,3,:5,:5])
-        import pdb;pdb.set_trace()
-
-        # (bs x c x c) x h x w ???
-        att_feats = att_feats.view(-1, *att_feats.shape[2:])            # check shape
-        print("att_feats.shape, ",att_feats.shape)
-        import pdb;pdb.set_trace()
-
-        # 2. Get score of all the feature groups
-        att_feats = self._gen_feat_part(att_feats)          # (bs x c x c) x npart
-        att_feats = self._chunk_feat(att_feats)             # (bs x c x c) x npart
-
-        _, out_0 = self.classifier(att_feats[0])
-        _, out_1 = self.classifier(att_feats[1])
-        _, out_2 = self.classifier(att_feats[2])
-        _, out_3 = self.classifier(att_feats[3])
- 
-        out_0 = F.softmax(out_0,dim=1)
-        out_1 = F.softmax(out_1,dim=1)
-        out_2 = F.softmax(out_2,dim=1)
-        out_3 = F.softmax(out_3,dim=1)
-
-        probs = torch.cat((out_0, out_1, out_2, out_3), 0)
-        probs = torch.mean(probs,0)
-        
-        probs = probs.view(bs, c, -1).permute(0, 2, 1)  # bs, num_cls, c
-        
-        print("check shape diff")
-        w0 = probs[:, labels]
-        wei = probs[torch.arange(0, labels.shape[0]), labels]
-        print(w0.shape)
-        print(wei.shape)
-        import pdb;pdb.set_trace()
-
-        weight = probs[torch.arange(0, labels.shape[0]), labels].unsqueeze(2).unsqueeze(2)      # check shape
-
-        # 3. Weighted sum
-        cam = (pooled_feats * weight).sum(dim=1)
-
-        return cam
-
-    def forward(self, x1, x2, modal=0, labels=None):
+    def forward(self, x1, x2, modal=0):
         if modal == 0:
             x1 = self.visible_module(x1)
             x2 = self.thermal_module(x2)
@@ -585,4 +521,4 @@ class embed_net_mulcla(nn.Module):
             # y = torch.cat((y_0, y_1, y_2, y_3, y_4, y_5), 1)            #(batch_size, low_dim*npart)
             y = torch.cat((y_0,y_1,y_2,y_3), 1)
 
-            return x, y
+            return x, y, (out0,out1,out2,out3)

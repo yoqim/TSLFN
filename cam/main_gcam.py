@@ -3,7 +3,8 @@ from __future__ import print_function
 import copy
 import os.path as osp
 
-import cv2
+import cv2,sys
+sys.path.append('..')
 import numpy as np
 import matplotlib.cm as cm
 from PIL import Image
@@ -14,7 +15,7 @@ import torch.nn.functional as F
 from torchvision import transforms
 
 from data_manager import *
-from models.shared_model import embed_net_shared
+from models.shared_model import embed_net_shared,embed_net_mulcla
 from grad_cam import BackPropagation,GradCAM
 
 
@@ -37,7 +38,6 @@ def save_gradcam(filename, gcam, raw_image):
     cv2.imwrite(filename, cam)
 
 
-
 def get_last_conv_name(net):
     layer_name = None
     for name, m in net.named_modules():
@@ -47,18 +47,26 @@ def get_last_conv_name(net):
 
 
 def demo1(images, raw_images, model, id_label, target_layer, output_dir):
-    bp = BackPropagation(model=model,forward_mode=forward_mode)
-    _, ids = bp.forward(images)                                 # ids: pred id
-    bp.remove_hook()
-    
-    gcam = GradCAM(model=model,forward_mode=forward_mode,target_layer=target_layer)
-    _ = gcam.forward(images)
-    
-    gcam.backward(ids=ids[:, [0]])
-    regions = gcam.generate(target_layer=target_layer)
+    # bp = BackPropagation(model=model,forward_mode=forward_mode)
+    # sorted_ids = bp.forward(images) # ids: pred id
+    # bp.remove_hook()
 
-    for j in range(len(images)):
-        save_gradcam(filename=osp.join(output_dir,"{}-feat{}-gradcam-pre{}-gt{}.png".format(j,part_id,ids[j,0], id_label[j])),gcam=regions[j,0],raw_image=raw_images[j])
+    gcam = GradCAM(model=model,forward_mode=forward_mode,target_layer=target_layer)
+    sorted_ids = gcam.forward(images)
+
+    for pid,sid in enumerate(sorted_ids):
+        print("--"*5)
+        print(sid[:,0])
+
+        gcam.backward(ids=sid[:, [0]], n_fea=pid)
+        regions = gcam.generate(n_fea=pid)
+
+        for j in range(len(images)):
+            save_gradcam(filename=osp.join(output_dir,"{}-feat{}-gradcam-pre{}-gt{}.png".format(j,pid,sid[j,0], id_label[j])), gcam=regions[j,0], raw_image=raw_images[j])
+
+        # gcam.remove_hook()
+
+
 
 
 def load_model(model,model_path):
@@ -92,9 +100,10 @@ def load_images(image_paths,transform):
 
 
 dataset = 'sysu'
-output_dir = './vis/sysu_cam/'
-data_path = './data/sysu/'
-model_name = 'sysu_lr_1.0e-02_md_all_sharenet2_cla4_npart4_best.t'
+output_dir = '../vis/sysu_cam/'
+data_path = '../data/sysu/'
+model_name = 'sysu_lr_1.0e-02_md_all_sharenet2_npart4_mulcla4_best.t'
+model_path = '../save_model/' + dataset + '/' + model_name
 
 low_dim = 512
 n_class = 395 if dataset == 'sysu' else 206
@@ -103,7 +112,6 @@ img_w = 144
 share_net = 2
 forward_mode = 2        # gallery=1; query=2 (sysu)
 npart = 4
-part_id = 0
 
 normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                 std=[0.229, 0.224, 0.225])
@@ -115,14 +123,13 @@ transform_test = transforms.Compose([
 ])
 
 # Load model
-model = embed_net_shared(low_dim, n_class, height=img_h, width=img_w, npart=npart, share_net=share_net, branch_name='rgas')
+model = embed_net_mulcla(low_dim, n_class, height=img_h, width=img_w, npart=npart, share_net=share_net, branch_name='rgas')
 model = model.cuda()
-model_path = 'save_model/' + dataset + '/' + model_name
 model = load_model(model, model_path)
 model.eval()
 
 # Load data  
-img_paths, id_label, _ = process_query_sysu(data_path, 'all')
+img_paths, id_label, _ = process_query_sysu('../../IVReIDData/SYSU-MM01/', 'all')
 # gall_img_path, gall_label, gall_cam = process_gallery_sysu(data_path, 'all')
 n_img = len(img_paths)
 
