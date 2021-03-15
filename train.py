@@ -4,6 +4,7 @@ import sys
 import time 
 import torch
 import torch.nn as nn
+from torch.nn import functional as F
 import torch.optim as optim
 import torch.backends.cudnn as cudnn
 import torch.utils.data as data
@@ -12,16 +13,13 @@ from data_loader import SYSUData, RegDBData, TestData
 from data_manager import *
 from eval_metrics import eval_sysu, eval_regdb
 
-from models.model import embed_net
-from models.rga_model import embed_net_rga
-from models.shared_model import embed_net_shared
+from models.shared_model import embed_net_shared,embed_net_mulcla
 
 from utils import *
 import Transform as transforms
 from heterogeneity_loss import hetero_loss
 from triplet_loss import OriTripletLoss
 import xlwt,xlrd
-
 
 parser = argparse.ArgumentParser(description='PyTorch Cross-Modality Training')
 parser.add_argument('--dataset', default='sysu',  help='dataset name: regdb or sysu]')
@@ -50,10 +48,6 @@ parser.add_argument('--batch-size', default=32, type=int,
                     metavar='B', help='training batch size')
 parser.add_argument('--test-batch', default=64, type=int,
                     metavar='tb', help='testing batch size')
-parser.add_argument('--method', default='id', type=str,
-                    metavar='m', help='method type')
-parser.add_argument('--drop', default=0.0, type=float,
-                    metavar='drop', help='dropout ratio')
 parser.add_argument('--trial', default=1, type=int,
                     metavar='t', help='trial (only for RegDB dataset)')
 parser.add_argument('--gpu', default='0', type=str,
@@ -69,8 +63,9 @@ parser.add_argument('--epochs', default=500, type=int,
                     help='overall epochs')
 parser.add_argument('--dist-type', default='l2', type=str,
                     help='type of distance')
-parser.add_argument('--share_net', default=4, type=int,
+parser.add_argument('--share_net', default=2, type=int,
                     metavar='share', help='[1,2,3,4,5] the start number of shared network in the two-stream networks')
+parser.add_argument('--npart', default=4, type=int,help='num of partial feature')
 
 torch.manual_seed(1)
 torch.cuda.manual_seed(1)
@@ -102,19 +97,21 @@ if not os.path.isdir(log_path):
     os.makedirs(log_path)
 if not os.path.isdir(checkpoint_path):
     os.makedirs(checkpoint_path)
- 
-if args.method =='id':
-    suffix = dataset + '_id_bn_relu'
-suffix = suffix + '_lr_{:1.1e}'.format(args.lr) 
-suffix = suffix + '_md_{}'.format(args.mode)
 
-if not args.optim == 'sgd':
-    suffix = suffix + '_' + args.optim
+### log name 
+suffix = '{}_lr_{:1.1e}'.format(dataset, args.lr) 
+
 if dataset =='regdb':
-    suffix = suffix + '_trial_{}'.format(args.trial)
+    suffix += '_trial_{}'.format(args.trial)
+else:
+    suffix += '_md_{}'.format(args.mode)
 
-# suffix += '_RGBs_34_resatt'                     
-suffix += '_sharenet{}'.format(args.share_net)                     
+suffix += '_sharenet{}'.format(args.share_net)  
+suffix += '_npart{}'.format(args.npart)    
+suffix += '_mulcla4'                    
+# suffix += '_cam'                    
+# suffix += '_debug'                    
+suffix += '_RGAs4_res'
 
 test_log_file = open(log_path + suffix + '.txt', "w")
 sys.stdout = Logger(log_path + suffix + '_os.txt')
@@ -165,7 +162,7 @@ elif dataset =='regdb':
     query_img_path, query_label = process_test_regdb(data_path, trial = args.trial, modal = 'visible')
     gall_img_path, gall_label  = process_test_regdb(data_path, trial = args.trial, modal = 'thermal')
 
-gallset = TestData(gall_img_path, gall_label, transform = transform_test, img_size =(args.img_w,args.img_h))
+gallset = TestData(gall_img_path, gall_label, transform = transform_test, img_size =(args.img_w, args.img_h))
 queryset = TestData(query_img_path, query_label, transform = transform_test, img_size =(args.img_w,args.img_h))
     
 # testing data loader
@@ -189,10 +186,8 @@ print('  ------------------------------')
 print('  Data Loading Time:\t {:.3f}'.format(time.time()-end))
 
 print('==> Building model...')
-# net = embed_net(args.low_dim, n_class, drop=args.drop, arch=args.arch)
-# net = embed_net_rga(args.low_dim, n_class, height=args.img_h, width=args.img_w, pretrained=True, dropout=args.drop, branch_name='rgas')
-net = embed_net_shared(args.low_dim, n_class, height=args.img_h, width=args.img_w,share_net=args.share_net,dropout=args.drop)
-
+# net = embed_net_shared(args.low_dim, n_class, height=args.img_h, width=args.img_w, npart=args.npart, share_net=args.share_net, branch_name='rgas')
+net = embed_net_mulcla(args.low_dim, n_class, height=args.img_h, width=args.img_w, npart=args.npart, share_net=args.share_net, branch_name='rgas')
 net.to(device)
 cudnn.benchmark = True
 
@@ -209,96 +204,45 @@ if len(args.resume)>0:
     else:
         print('==> no checkpoint found at {}'.format(args.resume))
 
-if args.method =='id':
-    thd = args.thd
-    criterion = nn.CrossEntropyLoss()
-    criterion_het = hetero_loss(margin=thd, dist_type=args.dist_type)
-    # criterion_tri = OriTripletLoss(margin=0.3)
 
-    criterion.to(device)
-    criterion_het.to(device)
-    # criterion_tri.to(device)
+thd = args.thd
+criterion = nn.CrossEntropyLoss()
+criterion_het = hetero_loss(margin=thd, dist_type=args.dist_type)
+criterion_tri = OriTripletLoss(margin=0.3)
+
+criterion.to(device)
+criterion_het.to(device)
+criterion_tri.to(device)
 
 ## setting different lr to baseline / classifiers
 def set_ignored_params(net):
-    ignored_params = list(map(id, net.feature1.parameters())) \
-                    + list(map(id, net.feature2.parameters())) \
-                    + list(map(id, net.feature3.parameters())) \
-                    + list(map(id, net.feature4.parameters())) \
-                    + list(map(id, net.feature5.parameters())) \
-                    + list(map(id, net.feature6.parameters())) \
-                    + list(map(id, net.classifier1.parameters())) \
-                    + list(map(id, net.classifier2.parameters())) \
-                    + list(map(id, net.classifier3.parameters()))\
-                    + list(map(id, net.classifier4.parameters()))\
-                    + list(map(id, net.classifier5.parameters()))\
-                    + list(map(id, net.classifier6.parameters()))
+    ignored_params = []
+    for i in range(args.npart):
+        ignored_params += eval("list(map(id, net.feature{}.parameters()))".format(i+1))
+        ignored_params += eval("list(map(id, net.classifier{}.parameters()))".format(i+1))
+
     return ignored_params
 
-def set_optimizer(optim_name,net,base_params):
-    if optim_name == 'sgd':
-        optimizer = optim.SGD([
-            {'params': base_params, 'lr': 0.1*args.lr},
-            {'params': net.feature1.parameters(), 'lr': args.lr},
-            {'params': net.feature2.parameters(), 'lr': args.lr},
-            {'params': net.feature3.parameters(), 'lr': args.lr},
-            {'params': net.feature4.parameters(), 'lr': args.lr},
-            {'params': net.feature5.parameters(), 'lr': args.lr},
-            {'params': net.feature6.parameters(), 'lr': args.lr},
-            {'params': net.classifier1.parameters(), 'lr': args.lr},
-            {'params': net.classifier2.parameters(), 'lr': args.lr},
-            {'params': net.classifier3.parameters(), 'lr': args.lr},
-            {'params': net.classifier4.parameters(), 'lr': args.lr},
-            {'params': net.classifier5.parameters(), 'lr': args.lr},
-            {'params': net.classifier6.parameters(), 'lr': args.lr}],
-            weight_decay=5e-4, momentum=0.9, nesterov=True)
-    elif optim_name == 'adam':
-        optimizer = optim.Adam([
-            {'params': base_params, 'lr': 0.1*args.lr},
-            {'params': net.feature.parameters(), 'lr': args.lr},
-            {'params': net.classifier.parameters(), 'lr': args.lr}],weight_decay=5e-4)
-    return optimizer
 
-## setting different lr to baseline / classifiers
-def set_ignored_params_rga(net):
-    ignored_params = list(map(id, net.classifier1.parameters()))\
-                    + list(map(id, net.classifier2.parameters()))\
-                    + list(map(id, net.classifier3.parameters()))\
-                    + list(map(id, net.classifier4.parameters()))\
-                    + list(map(id, net.classifier5.parameters()))\
-                    + list(map(id, net.classifier6.parameters()))
-    return ignored_params
-
-def set_optimizer_rga(optim_name,net,base_params):
-    if optim_name == 'sgd':
-        optimizer = optim.SGD([
-            {'params': base_params, 'lr': 0.1*args.lr},
-            {'params': net.classifier1.parameters(), 'lr': args.lr},
-            {'params': net.classifier2.parameters(), 'lr': args.lr},
-            {'params': net.classifier3.parameters(), 'lr': args.lr},
-            {'params': net.classifier4.parameters(), 'lr': args.lr},
-            {'params': net.classifier5.parameters(), 'lr': args.lr},
-            {'params': net.classifier6.parameters(), 'lr': args.lr}],
-            weight_decay=5e-4, momentum=0.9, nesterov=True)
-    elif optim_name == 'adam':
-        optimizer = optim.Adam([
-            {'params': base_params, 'lr': 0.1*args.lr},
-            {'params': net.classifier.parameters(), 'lr': args.lr}],weight_decay=5e-4)
-    return optimizer
-
-
-# *********** params for TSLFN *********** 
-# ignored_params = set_ignored_params(net)
-# base_params = filter(lambda p: id(p) not in ignored_params, net.parameters())
-# optimizer = set_optimizer(args.optim, net, base_params)
-
-# *********** params for TSLFN+RGA *********** 
-ignored_params = set_ignored_params_rga(net)
+# *********** params for Shared Net *********** 
+ignored_params = set_ignored_params(net)
 base_params = filter(lambda p: id(p) not in ignored_params, net.parameters())
-optimizer = set_optimizer_rga(args.optim, net, base_params)
+optimizer = optim.SGD([
+    {'params': base_params, 'lr': 0.1*args.lr},
+    {'params': net.feature1.parameters(), 'lr': args.lr},
+    {'params': net.feature2.parameters(), 'lr': args.lr},
+    {'params': net.feature3.parameters(), 'lr': args.lr},
+    {'params': net.feature4.parameters(), 'lr': args.lr},
+    # {'params': net.feature5.parameters(), 'lr': args.lr},
+    # {'params': net.feature6.parameters(), 'lr': args.lr},
+    {'params': net.classifier1.parameters(), 'lr': args.lr},
+    {'params': net.classifier2.parameters(), 'lr': args.lr},
+    {'params': net.classifier3.parameters(), 'lr': args.lr},
+    {'params': net.classifier4.parameters(), 'lr': args.lr}
+    ],
+    weight_decay=5e-4, momentum=0.9, nesterov=True)
 
-
-def adjust_learning_rate_rga(optimizer, epoch, change_epoch=[30,60]):
+def adjust_learning_rate(optimizer, epoch, change_epoch=[30,60]):
     """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
     if epoch < 10:
         lr = args.lr * (epoch + 1) / 10
@@ -309,66 +253,36 @@ def adjust_learning_rate_rga(optimizer, epoch, change_epoch=[30,60]):
     else:
         lr = args.lr * 0.01
     
-    optimizer.param_groups[0]['lr'] = 0.1*lr
-    optimizer.param_groups[1]['lr'] = lr
-    optimizer.param_groups[2]['lr'] = lr
-    optimizer.param_groups[3]['lr'] = lr
-    optimizer.param_groups[4]['lr'] = lr
-    optimizer.param_groups[5]['lr'] = lr
-    optimizer.param_groups[6]['lr'] = lr
-    return lr
-
-
-def adjust_learning_rate(optimizer, epoch):
-    """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
-
-    if epoch < 30:
-        lr = args.lr
-    elif epoch >= 30 and epoch < 60:
-        lr = args.lr * 0.1
-    else:
-        lr = args.lr * 0.01
-    
-    optimizer.param_groups[0]['lr'] = 0.1*lr
-    optimizer.param_groups[1]['lr'] = lr
-    optimizer.param_groups[2]['lr'] = lr
-    optimizer.param_groups[3]['lr'] = lr
-    optimizer.param_groups[4]['lr'] = lr
-    optimizer.param_groups[5]['lr'] = lr
-    optimizer.param_groups[6]['lr'] = lr
-    optimizer.param_groups[7]['lr'] = lr
-    optimizer.param_groups[8]['lr'] = lr
-    optimizer.param_groups[9]['lr'] = lr
-    optimizer.param_groups[10]['lr'] = lr
-    optimizer.param_groups[11]['lr'] = lr
-    optimizer.param_groups[12]['lr'] = lr
+    for i in range(len(optimizer.param_groups)):
+        if i==0:
+            optimizer.param_groups[i]['lr'] = 0.1*lr
+        else:
+            optimizer.param_groups[i]['lr'] = lr
     return lr
 
 
 def CalAccurate(cla_output,labels):
+    cla_output = F.softmax(cla_output,dim=1)
     _, predicted = cla_output.max(1)
     correct = predicted.eq(labels).sum().item()
     return correct/len(labels)
 
 def extract_feat(data_loader,data_num,forward_mode):
-    net.eval()
-
     start = time.time()
     ptr = 0
-    feats = np.zeros((data_num, 6*feature_dim))
+    feats = np.zeros((data_num, args.npart*feature_dim))
     with torch.no_grad():
         for _, (input, _) in enumerate(data_loader):
             batch_num = input.size(0)
             input = input.cuda()
             _, feat = net(input, input, forward_mode)
-            feats[ptr:ptr+batch_num,: ] = feat.detach().cpu().numpy()
+            feats[ptr:ptr+batch_num,:] = feat.detach().cpu().numpy()
             ptr += batch_num         
     print('Extracting Time:\t {:.3f}'.format(time.time()-start))
     return feats 
 
 def train(epoch):
-    # current_lr = adjust_learning_rate(optimizer, epoch)
-    current_lr = adjust_learning_rate_rga(optimizer, epoch, change_epoch=[80,120])
+    current_lr = adjust_learning_rate(optimizer, epoch, change_epoch=[40,80])
     train_loss = AverageMeter()
     data_time = AverageMeter()
     batch_time = AverageMeter()
@@ -387,47 +301,44 @@ def train(epoch):
 
         data_time.update(time.time() - end)
         
-        x_pool, outputs, feat = net(input1, input2) # outputs: classifier outputs -> id loss ; feat: feature after l2norm -> hc loss ; rga net
-        # outputs, feat = net(input1, input2) # for original net
+        # y, outputs, feat = net(input1, input2) 
+        y, outputs, feat = net(input1, input2, labels=labels) 
+        # y: backbone outputs -> triplet loss;
+        # outputs: classifier outputs -> id loss; 
+        # feat: feature after l2norm -> hc loss;
         
-        # loss_tri, _ = criterion_tri(x_pool, labels)  
-    
-        if args.method =='id':
-            loss0 = criterion(outputs[0], labels)
-            loss1 = criterion(outputs[1], labels)
-            loss2 = criterion(outputs[2], labels)
-            loss3 = criterion(outputs[3], labels)
-            loss4 = criterion(outputs[4], labels)
-            loss5 = criterion(outputs[5], labels)
-            
-            het_feat0 = feat[0].chunk(2, 0)
-            het_feat1 = feat[1].chunk(2, 0)
-            het_feat2 = feat[2].chunk(2, 0)
-            het_feat3 = feat[3].chunk(2, 0)
-            het_feat4 = feat[4].chunk(2, 0)
-            het_feat5 = feat[5].chunk(2, 0)
-
-            loss_c0 = criterion_het(het_feat0[0], het_feat0[1], label1, label2)
-            loss_c1 = criterion_het(het_feat1[0], het_feat1[1], label1, label2)
-            loss_c2 = criterion_het(het_feat2[0], het_feat2[1], label1, label2)
-            loss_c3 = criterion_het(het_feat3[0], het_feat3[1], label1, label2)
-            loss_c4 = criterion_het(het_feat4[0], het_feat4[1], label1, label2)
-            loss_c5 = criterion_het(het_feat5[0], het_feat5[1], label1, label2)
-            loss0 = loss0 + w_hc * loss_c0
-            loss1 = loss1 + w_hc * loss_c1
-            loss2 = loss2 + w_hc * loss_c2
-            loss3 = loss3 + w_hc * loss_c3
-            loss4 = loss4 + w_hc * loss_c4
-            loss5 = loss5 + w_hc * loss_c5
-
-            cc = 0
-            for ss in range(6):
-                acc=eval("CalAccurate(outputs[{}],labels)".format(ss))
-                cc += acc
-            correct+=cc/6
+        loss_tri, _ = criterion_tri(y, labels) 
         
-        # loss = loss0 + loss1 + loss2 + loss3 + loss4 + loss5 + loss_tri
-        loss = loss0 + loss1 + loss2 + loss3 + loss4 + loss5
+        loss_id0 = criterion(outputs[0], labels)
+        loss_id1 = criterion(outputs[1], labels)
+        loss_id2 = criterion(outputs[2], labels)
+        loss_id3 = criterion(outputs[3], labels)
+        
+        cc = 0
+        for out in outputs:
+            cc += CalAccurate(out,labels)
+        correct += cc/len(outputs)
+        
+        het_feat0 = feat[0].chunk(2, 0)
+        het_feat1 = feat[1].chunk(2, 0)
+        het_feat2 = feat[2].chunk(2, 0)
+        het_feat3 = feat[3].chunk(2, 0)
+        # het_feat4 = feat[4].chunk(2, 0)
+        # het_feat5 = feat[5].chunk(2, 0)
+
+        loss_c0 = criterion_het(het_feat0[0], het_feat0[1], label1, label2)
+        loss_c1 = criterion_het(het_feat1[0], het_feat1[1], label1, label2)
+        loss_c2 = criterion_het(het_feat2[0], het_feat2[1], label1, label2)
+        loss_c3 = criterion_het(het_feat3[0], het_feat3[1], label1, label2)
+        # loss_c4 = criterion_het(het_feat4[0], het_feat4[1], label1, label2)
+        # loss_c5 = criterion_het(het_feat5[0], het_feat5[1], label1, label2)
+        
+        loss0 = loss_id0 + w_hc * loss_c0
+        loss1 = loss_id1 + w_hc * loss_c1
+        loss2 = loss_id2 + w_hc * loss_c2
+        loss3 = loss_id3 + w_hc * loss_c3
+        loss = loss0 + loss1 + loss2 + loss3 + loss_tri
+ 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
@@ -437,9 +348,9 @@ def train(epoch):
         batch_time.update(time.time() - end)
         end = time.time()
         if batch_idx % loss_print_interval==0:
-            print("=> ID loss {:.2f}".format(loss0-w_hc*loss_c0))
+            print("=> ID loss {:.2f}".format(loss_id0))
             print("=> HC loss {:.2f}".format(loss_c0))
-            # print("=> Triplet loss {:.2f}".format(loss_tri))
+            print("=> Triplet loss {:.2f}".format(loss_tri))
             print('Epoch: [{}][{}/{}] '
                   'Time: {batch_time.val:.3f} ({batch_time.avg:.3f}) '
                   'Data: {data_time.val:.3f} ({data_time.avg:.3f}) '
@@ -452,6 +363,8 @@ def train(epoch):
 
 
 def test(epoch):   
+    net.eval()
+
     gall_feat = extract_feat(gall_loader,ngall,test_mode[0])
     query_feat = extract_feat(query_loader,nquery,test_mode[1])
 
@@ -496,22 +409,12 @@ for epoch in range(start_epoch, args.epochs+1-start_epoch):
         test_log_file.flush()
         
         if mAP > best_mAP:
-            best_mAP = mAP
-            state = {
-                'net': net.state_dict(),
-                'cmc': cmc,
-                'mAP': mAP,
-                'epoch': epoch,
-            }
-            torch.save(state, checkpoint_path + suffix + '_best.t')
-
-
-        # save model every 20 epochs    
-        # if epoch > 10 and epoch%args.save_epoch ==0:
-        #     state = {
-        #         'net': net.state_dict(),
-        #         'cmc': cmc,
-        #         'mAP': mAP,
-        #         'epoch': epoch,
-        #     }
-        #     torch.save(state, checkpoint_path + suffix + '_epoch_{}.t'.format(epoch))
+            if 'debug' not in suffix:
+                best_mAP = mAP
+                state = {
+                    'net': net.state_dict(),
+                    'cmc': cmc,
+                    'mAP': mAP,
+                    'epoch': epoch,
+                }
+                torch.save(state, checkpoint_path + suffix + '_best.t')

@@ -10,7 +10,6 @@ import torch.utils.data as data
 class SYSUData(data.Dataset):
     def __init__(self, data_dir,  transform=None, colorIndex=None, thermalIndex=None):
         
-        # Load training images (path) and labels
         train_color_image = np.load(data_dir + 'train_rgb_resized_img.npy')
         self.train_color_label = np.load(data_dir + 'train_rgb_resized_label.npy')
 
@@ -26,8 +25,8 @@ class SYSUData(data.Dataset):
 
     def __getitem__(self, index):
 
-        img1,  target1 = self.train_color_image[self.cIndex[index]],  self.train_color_label[self.cIndex[index]]
-        img2,  target2 = self.train_thermal_image[self.tIndex[index]], self.train_thermal_label[self.tIndex[index]]
+        img1, target1 = self.train_color_image[self.cIndex[index]],  self.train_color_label[self.cIndex[index]]
+        img2, target2 = self.train_thermal_image[self.tIndex[index]], self.train_thermal_label[self.tIndex[index]]
         
         img1 = self.transform(img1)
         img2 = self.transform(img2)
@@ -111,7 +110,7 @@ class TestData(data.Dataset):
 def load_data(input_data_path ):
     with open(input_data_path) as f:
         data_file_list = open(input_data_path, 'rt').read().splitlines()
-        # Get full list of image and labels
+
         file_image = [s.split(' ')[0] for s in data_file_list]
         file_label = [int(s.split(' ')[1]) for s in data_file_list]
         
