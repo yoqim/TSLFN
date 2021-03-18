@@ -32,6 +32,7 @@ def process_query_sysu(data_path, mode = 'all', relabel=False):
         query_img.append(img_path)
         query_id.append(pid)
         query_cam.append(camid)
+
     return query_img, np.array(query_id), np.array(query_cam)
 
 def process_gallery_sysu(data_path, mode = 'all', relabel=False, gall_mode='single'):
@@ -40,7 +41,6 @@ def process_gallery_sysu(data_path, mode = 'all', relabel=False, gall_mode='sing
     elif mode =='indoor':
         rgb_cameras = ['cam1','cam2']
     
-    data_path = '../IVReIDData/SYSU-MM01/'
     file_path = os.path.join(data_path,'exp/test_id.txt')
     files_rgb = []
     with open(file_path, 'r') as file:
@@ -60,6 +60,7 @@ def process_gallery_sysu(data_path, mode = 'all', relabel=False, gall_mode='sing
     gall_img = []
     gall_id = []
     gall_cam = []
+
     for img_path in files_rgb:
         if gall_mode == 'single':
             camid, pid = int(img_path[-15]), int(img_path[-13:-9])

@@ -13,7 +13,7 @@ from data_loader import SYSUData, RegDBData, TestData
 from data_manager import *
 from eval_metrics import eval_sysu, eval_regdb
 
-from models.shared_model import embed_net_shared,embed_net_mulcla
+from models.model_ddag import embed_net_graph
 from color import *
 from utils import *
 import Transform as transforms
@@ -108,9 +108,9 @@ else:
     suffix += '_md_{}'.format(args.mode)
 
 suffix += '_sharenet{}'.format(args.share_net)  
-suffix += '_npart{}'.format(args.npart)    
 suffix += '_mulcla4'                 
-# suffix += '_debug'                    
+suffix += '_graph'                 
+suffix += '_debug'                    
 # suffix += '_RGAs4_res'
 
 test_log_file = open(log_path + suffix + '.txt', "w")
@@ -159,8 +159,8 @@ elif dataset =='regdb':
     color_pos, thermal_pos = GenIdx(trainset.train_color_label, trainset.train_thermal_label)
     
     # testing set
-    query_img_path, query_label = process_test_regdb(data_path, trial = args.trial, modal = 'visible')
-    gall_img_path, gall_label  = process_test_regdb(data_path, trial = args.trial, modal = 'thermal')
+    query_img_path, query_label = process_test_regdb(data_path, trial=args.trial, modal = 'visible')
+    gall_img_path, gall_label  = process_test_regdb(data_path, trial=args.trial, modal = 'thermal')
 
 gallset = TestData(gall_img_path, gall_label, transform = transform_test, img_size =(args.img_w, args.img_h))
 queryset = TestData(query_img_path, query_label, transform = transform_test, img_size =(args.img_w,args.img_h))
@@ -186,9 +186,7 @@ print('  ------------------------------')
 print('  Data Loading Time:\t {:.3f}'.format(time.time()-end))
 
 print('==> Building model...')
-# net = embed_net_shared(args.low_dim, n_class, height=args.img_h, width=args.img_w, npart=args.npart, share_net=args.share_net, branch_name='rgas')
-
-net = embed_net_mulcla(args.low_dim, n_class, height=args.img_h, width=args.img_w, npart=args.npart, share_net=args.share_net, branch_name='rgas')
+net = embed_net_graph(args.low_dim, n_class, height=args.img_h, width=args.img_w, npart=args.npart, share_net=args.share_net, branch_name='rgas',alpha=0.2, nheads=4)
 net.to(device)
 
 if len(args.resume)>0:   
@@ -233,8 +231,6 @@ optimizer = optim.SGD([
     {'params': net.feature2.parameters(), 'lr': args.lr},
     {'params': net.feature3.parameters(), 'lr': args.lr},
     {'params': net.feature4.parameters(), 'lr': args.lr},
-    # {'params': net.feature5.parameters(), 'lr': args.lr},
-    # {'params': net.feature6.parameters(), 'lr': args.lr},
     {'params': net.classifier1.parameters(), 'lr': args.lr},
     {'params': net.classifier2.parameters(), 'lr': args.lr},
     {'params': net.classifier3.parameters(), 'lr': args.lr},
@@ -271,7 +267,6 @@ def get_sorted_ids(outputs):
 
 
 def CalAccurate(cla_output,labels):
-    # cla_output = F.softmax(cla_output,dim=1)
     _, predicted = cla_output.max(1)
     correct = predicted.eq(labels).sum().item()
 
@@ -292,32 +287,38 @@ def extract_feat(data_loader,data_num,forward_mode):
     return feats 
 
 
-
-
-def train(epoch):
+def train(epoch,w_G):
     current_lr = adjust_learning_rate(optimizer, epoch, change_epoch=[60,90])
     train_loss = AverageMeter()
     data_time = AverageMeter()
     batch_time = AverageMeter()
     correct = 0
-    weights = torch.ones((64,2048,1,1)).cuda()
 
     net.train()
     end = time.time()
 
     for batch_idx, (input1, input2, label1, label2) in enumerate(trainloader):
+        labels = torch.cat((label1,label2),0)
+        
+        one_hot = torch.index_select(torch.eye(n_class), dim=0, index=labels)
+        adj = torch.mm(one_hot, torch.transpose(one_hot, 0, 1)).float() + torch.eye(labels.size()[0]).float()           
+        
+        w_norm = adj.pow(2).sum(1, keepdim=True).pow(1. / 2)
+        adj_norm = adj.div(w_norm) 
+        
+        adj_norm = adj_norm.cuda()
         input1 = input1.cuda()
         input2 = input2.cuda()
-        
-        labels = torch.cat((label1,label2),0).cuda()
+        labels = labels.cuda()
         label1 = label1.cuda()
         label2 = label2.cuda()
 
         data_time.update(time.time() - end)
 
-        y, outputs, feat = net(input1, input2, cam_weight=None) 
+        y, outputs, feat, g_out = net(input1, input2, adj=adj_norm) 
 
         loss_tri, _ = criterion_tri(y, labels) 
+        loss_G = F.nll_loss(g_out, labels)
         
         loss_id0 = criterion(outputs[0], labels)
         loss_id1 = criterion(outputs[1], labels)
@@ -333,25 +334,22 @@ def train(epoch):
         het_feat1 = feat[1].chunk(2, 0)
         het_feat2 = feat[2].chunk(2, 0)
         het_feat3 = feat[3].chunk(2, 0)
-        # het_feat4 = feat[4].chunk(2, 0)
-        # het_feat5 = feat[5].chunk(2, 0)
 
         loss_c0 = criterion_het(het_feat0[0], het_feat0[1], label1, label2)
         loss_c1 = criterion_het(het_feat1[0], het_feat1[1], label1, label2)
         loss_c2 = criterion_het(het_feat2[0], het_feat2[1], label1, label2)
         loss_c3 = criterion_het(het_feat3[0], het_feat3[1], label1, label2)
-        # loss_c4 = criterion_het(het_feat4[0], het_feat4[1], label1, label2)
-        # loss_c5 = criterion_het(het_feat5[0], het_feat5[1], label1, label2)
-        
+
         loss0 = loss_id0 + w_hc * loss_c0
         loss1 = loss_id1 + w_hc * loss_c1
         loss2 = loss_id2 + w_hc * loss_c2
         loss3 = loss_id3 + w_hc * loss_c3
+
         loss = loss0 + loss1 + loss2 + loss3 + loss_tri
-        # loss = loss0 + loss1 + loss2 + loss_tri
+        total_loss = loss + w_G * loss_G
  
         optimizer.zero_grad()
-        loss.backward()
+        total_loss.backward()
         optimizer.step()
 
         train_loss.update(loss.item(), 2*input1.size(0))
@@ -362,6 +360,7 @@ def train(epoch):
             print("=> ID loss {:.2f}".format(loss_id0))
             print("=> HC loss {:.2f}".format(loss_c0))
             print("=> Triplet loss {:.2f}".format(loss_tri))
+            print("=> G loss {:.2f}".format(loss_G))
             print('Epoch: [{}][{}/{}] '
                   'Time: {batch_time.val:.3f} ({batch_time.avg:.3f}) '
                   'Data: {data_time.val:.3f} ({data_time.avg:.3f}) '
@@ -371,7 +370,8 @@ def train(epoch):
                   epoch, batch_idx, len(trainloader), current_lr, 
                   100.*correct/len(trainloader), batch_time=batch_time, 
                   data_time=data_time, train_loss=train_loss))
-
+    
+    return 1. / (1. + train_loss.avg)
 
 def test(epoch):   
     net.eval()
@@ -395,6 +395,7 @@ print('==> Start Training...')
 per_img = args.per_img
 per_id = args.batch_size / per_img
 w_hc = args.w_hc
+w_G = 0
 
 for epoch in range(start_epoch, args.epochs+1-start_epoch):
     print('==> Preparing Data Loader...')
@@ -406,10 +407,9 @@ for epoch in range(start_epoch, args.epochs+1-start_epoch):
     trainloader = data.DataLoader(trainset, batch_size=args.batch_size,\
         sampler = sampler, num_workers=args.workers, drop_last =True)
     
-    train(epoch)
+    w_G = train(epoch,w_G)
 
-    # if epoch > 0 and epoch % 2 == 0:
-    if epoch % 1 == 0:
+    if epoch > 0 and epoch % 2 == 0:
         print (red('Test Epoch: {}'.format(epoch)))
         print ('Test Epoch: {}'.format(epoch),file=test_log_file)
 

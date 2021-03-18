@@ -1,15 +1,30 @@
-import os
-import numpy as np
-
 import torch
-from torch import nn
-from torch.nn import functional as F
+import torch.nn as nn
 from torch.nn import init
+from torchvision import models
+import torch.nn.functional as F
+import math
 
+from models.attention import GraphAttentionLayer
 from models.resnet import resnet50
-from .models_utils.rga_modules import RGA_Module
+from models.models_utils.rga_modules import RGA_Module
 
 
+class Normalize(nn.Module):
+    def __init__(self, power=2):
+        super(Normalize, self).__init__()
+        self.power = power
+
+    def forward(self, x):
+        norm = x.pow(self.power).sum(1, keepdim=True).pow(1. / self.power)
+        out = x.div(norm)
+        return out
+
+
+
+##############################
+# Initialization
+##############################
 def weights_init_kaiming(m):
     classname = m.__class__.__name__
     if classname.find('Conv') != -1:
@@ -21,26 +36,14 @@ def weights_init_kaiming(m):
         init.normal_(m.weight.data, 1.0, 0.01)
         init.zeros_(m.bias.data)
 
-       
+
 def weights_init_classifier(m):
     classname = m.__class__.__name__
     if classname.find('Linear') != -1:
         init.normal_(m.weight.data, 0, 0.001)
-
-class Normalize(nn.Module):
-    def __init__(self, power=2):
-        super(Normalize, self).__init__()
-        self.power = power
-    
-    def forward(self, x):
-        norm = x.pow(self.power).sum(1, keepdim=True).pow(1./self.power)
-        out = x.div(norm)
-        return out
+        # init.zeros_(m.bias.data)
 
 
-##############################
-# Networks
-##############################
 
 class FeatureBlock(nn.Module):
     def __init__(self, input_dim, low_dim):
@@ -193,169 +196,9 @@ class base_resnet(nn.Module):
         return x
 
 
-class embed_net_shared(nn.Module):
-    def __init__(self, low_dim, class_num, height, width, npart, share_net=1, branch_name='rgas'):
-        super(embed_net_shared, self).__init__()
-        
-        self.npart = npart
-        pool_dim = 2048
-        self.thermal_module = thermal_module(share_net=share_net)
-        self.visible_module = visible_module(share_net=share_net)
-        self.base_resnet = base_resnet(share_net=share_net, height=height, width=width, scale=8, d_scale=8,branch_name=branch_name)
-
-        for i in range(self.npart):
-            exec('self.feature{} = FeatureBlock(pool_dim, low_dim)'.format(i+1))
-
-        self.classifier = nn.Linear(low_dim, class_num, bias=False)
-        # self.classifier = nn.Linear(low_dim*self.npart, class_num, bias=False)
-        self.classifier.apply(weights_init_classifier)
-
-        self.l2norm = Normalize(2)
-
-    def _gen_feat_part(self, feat):
-        '''
-        gen partial feature maps
-        ori : (b,c,h,w) -> p_fea: (b,c,npart)
-
-        '''
-        sx = feat.size(2) / self.npart
-        sx = int(sx)
-        kx = feat.size(2) - sx * (self.npart-1)
-        kx = int(kx)
-        
-        x = F.avg_pool2d(feat, kernel_size=(kx, feat.size(3)), stride=(sx, feat.size(3)))
-        x = x.view(x.size(0), x.size(1), x.size(2))  
-        
-        return x
-    
-    def _chunk_feat(self, feat):
-        feat = feat.chunk(self.npart, 2)
-
-        chunk_feat = []
-        for i in range(self.npart):
-            exec('chunk_feat.append(feat[{}].contiguous().view(feat[{}].size(0), -1))'.format(i,i))
-        return chunk_feat
-
-    def _chunk_fmout(self, fmout):
-        fmout = fmout.chunk(2,0)
-
-        chunk_feat = []
-        for i in range(2):
-            exec('chunk_feat.append(fmout[{}].contiguous().view(fmout[{}].size(0), -1))'.format(i,i))
-        return chunk_feat
-
-    def forward(self, x1, x2, modal=0):
-        if modal == 0:
-            x1 = self.visible_module(x1)
-            x2 = self.thermal_module(x2)
-            x = torch.cat((x1, x2), 0)
-
-        elif modal == 1:
-            x = self.visible_module(x1)
-
-        elif modal == 2:
-            x = self.thermal_module(x2)
-        
-        x = self.base_resnet(x)
-
-        if modal==0:
-            [x1,x2] = x.chunk(2, 0)
-            x1 = x1.contiguous()
-            x2 = x2.contiguous()
-
-            x1 = self._gen_feat_part(x1)
-            x1 = self._chunk_feat(x1)
-
-            x2 = self._gen_feat_part(x2)
-            x2 = self._chunk_feat(x2)
-
-            x_0 = torch.cat((x1[0], x2[0]), 0)
-            x_1 = torch.cat((x1[1], x2[1]), 0)
-            x_2 = torch.cat((x1[2], x2[2]), 0)
-            x_3 = torch.cat((x1[3], x2[3]), 0)
-            # x_4 = torch.cat((x1[4], x2[4]), 0)
-            # x_5 = torch.cat((x1[5], x2[5]), 0)
-
-        elif modal == 1:
-            x1 = self._gen_feat_part(x)
-            x1 = self._chunk_feat(x1)
-            
-            x_0 = x1[0]
-            x_1 = x1[1]
-            x_2 = x1[2]
-            x_3 = x1[3]
-            # x_4 = x1[4]
-            # x_5 = x1[5]
-        
-        elif modal == 2:
-            x2 = self._gen_feat_part(x)
-            x2 = self._chunk_feat(x2)
-            
-            x_0 = x2[0]
-            x_1 = x2[1]
-            x_2 = x2[2]
-            x_3 = x2[3]
-            # x_4 = x2[4]
-            # x_5 = x2[5]
-
-        y_0 = self.feature1(x_0)                    # head: (vis 32,the 32)
-        y_1 = self.feature2(x_1)
-        y_2 = self.feature3(x_2)
-        y_3 = self.feature4(x_3)
-        # y_4 = self.feature5(x_4)
-        # y_5 = self.feature6(x_5)
-
-        if modal == 0:
-            y0 = self._chunk_fmout(y_0)
-            y1 = self._chunk_fmout(y_1)
-            y2 = self._chunk_fmout(y_2)
-            y3 = self._chunk_fmout(y_3)
-            # y4 = self._chunk_fmout(y_4)
-            # y5 = self._chunk_fmout(y_5)
-
-            # y_vis = torch.cat((y0[0], y1[0], y2[0], y3[0], y4[0], y5[0]), 1)
-            # y_the = torch.cat((y0[1], y1[1], y2[1], y3[1], y4[1], y5[1]), 1)
-            y_vis = torch.cat((y0[0], y1[0], y2[0], y3[0]), 1)
-            y_the = torch.cat((y0[1], y1[1], y2[1], y3[1]), 1)
-            
-            y = torch.cat((y_vis,y_the), 0)                     # whole feat: (2 x batch_size, low_dim*npart)
-        else:
-            y = torch.cat((y_0,y_1,y_2,y_3), 1)
-        
-        out0 = self.classifier(y_0)
-        out1 = self.classifier(y_1)
-        out2 = self.classifier(y_2)
-        out3 = self.classifier(y_3)
-
-        if self.training:
-            # return y, out, (self.l2norm(y_0), self.l2norm(y_1), self.l2norm(y_2), self.l2norm(y_3), self.l2norm(y_4), self.l2norm(y_5))
-            return y, (out0,out1,out2,out3), (self.l2norm(y_0), self.l2norm(y_1), self.l2norm(y_2), self.l2norm(y_3))
-        else:
-            x_0 = self.l2norm(x_0)
-            x_1 = self.l2norm(x_1)
-            x_2 = self.l2norm(x_2)
-            x_3 = self.l2norm(x_3)
-            # x_4 = self.l2norm(x_4)
-            # x_5 = self.l2norm(x_5)
-            # x = torch.cat((x_0, x_1, x_2, x_3, x_4, x_5), 1)
-            x = torch.cat((x_0, x_1, x_2, x_3), 1)
-
-            y_0 = self.l2norm(y_0)
-            y_1 = self.l2norm(y_1)
-            y_2 = self.l2norm(y_2)
-            y_3 = self.l2norm(y_3)
-            # y_4 = self.l2norm(y_4)
-            # y_5 = self.l2norm(y_5)
-
-            # y = torch.cat((y_0, y_1, y_2, y_3, y_4, y_5), 1)            #(batch_size, low_dim*6)
-            y = torch.cat((y_0,y_1,y_2,y_3), 1)
-
-            return x, y, out0
-
-
-class embed_net_mulcla(nn.Module):
-    def __init__(self, low_dim, class_num, height, width, npart, share_net=1, branch_name='rgas'):
-        super(embed_net_mulcla, self).__init__()
+class embed_net_graph(nn.Module):
+    def __init__(self, low_dim, class_num, height, width, npart, share_net=2, branch_name='rgas', alpha=0.2,nheads=4):
+        super(embed_net_graph, self).__init__()
         
         self.npart = npart
         pool_dim = 2048
@@ -377,6 +220,15 @@ class embed_net_mulcla(nn.Module):
             exec('self.classifier{}.apply(weights_init_classifier)'.format(i+1))
 
         self.l2norm = Normalize(2)
+        
+        ### Graph params
+        # if self.training:
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.attentions = [GraphAttentionLayer(pool_dim, low_dim, alpha=alpha, concat=True) for _ in range(nheads)]
+        for i, attention in enumerate(self.attentions):
+            self.add_module('attention_{}'.format(i), attention)
+
+        self.out_att = GraphAttentionLayer(low_dim*nheads, class_num, alpha=alpha, concat=False)
 
 
     def _gen_feat_part(self, feat):
@@ -420,8 +272,7 @@ class embed_net_mulcla(nn.Module):
         return chunk_feat
 
 
-
-    def forward(self, x1, x2, modal=0, cam_weight=None):
+    def forward(self, x1, x2, modal=0, adj=None):
         if modal == 0:
             x1 = self.visible_module(x1)
             x2 = self.thermal_module(x2)
@@ -435,7 +286,11 @@ class embed_net_mulcla(nn.Module):
         
         x = self.base_resnet(x)
 
+
         if modal==0:
+            x_pool = self.avgpool(x)
+            x_pool = x_pool.view(x_pool.size(0), x_pool.size(1))
+            
             [x1,x2] = x.chunk(2, 0)
             x1 = x1.contiguous()
             x2 = x2.contiguous()
@@ -450,8 +305,6 @@ class embed_net_mulcla(nn.Module):
             x_1 = torch.cat((x1[1], x2[1]), 0)
             x_2 = torch.cat((x1[2], x2[2]), 0)
             x_3 = torch.cat((x1[3], x2[3]), 0)
-            # x_4 = torch.cat((x1[4], x2[4]), 0)
-            # x_5 = torch.cat((x1[5], x2[5]), 0)
 
         elif modal == 1:
             x1 = self._gen_feat_part(x)
@@ -461,8 +314,7 @@ class embed_net_mulcla(nn.Module):
             x_1 = x1[1]
             x_2 = x1[2]
             x_3 = x1[3]
-            # x_4 = x1[4]
-            # x_5 = x1[5]
+
         
         elif modal == 2:
             x2 = self._gen_feat_part(x)
@@ -472,36 +324,25 @@ class embed_net_mulcla(nn.Module):
             x_1 = x2[1]
             x_2 = x2[2]
             x_3 = x2[3]
-            # x_4 = x2[4]
-            # x_5 = x2[5]
+
 
         y_0 = self.feature1(x_0)                    # head: (vis 32, the 32)
         y_1 = self.feature2(x_1)
         y_2 = self.feature3(x_2)
         y_3 = self.feature4(x_3)
-        # y_4 = self.feature5(x_4)
-        # y_5 = self.feature6(x_5)
 
         if modal == 0:
             y0 = self._chunk_fmout(y_0)
             y1 = self._chunk_fmout(y_1)
             y2 = self._chunk_fmout(y_2)
             y3 = self._chunk_fmout(y_3)
-            # y4 = self._chunk_fmout(y_4)
-            # y5 = self._chunk_fmout(y_5)
 
-            # y_vis = torch.cat((y0[0], y1[0], y2[0], y3[0], y4[0], y5[0]), 1)
-            # y_the = torch.cat((y0[1], y1[1], y2[1], y3[1], y4[1], y5[1]), 1)
             y_vis = torch.cat((y0[0], y1[0], y2[0], y3[0]), 1)
             y_the = torch.cat((y0[1], y1[1], y2[1], y3[1]), 1)
-
-            # y_vis = torch.cat((y0[0], y1[0], y2[0]), 1)
-            # y_the = torch.cat((y0[1], y1[1], y2[1]), 1)
             
             y = torch.cat((y_vis,y_the), 0)                     # whole feat: (2 x batch_size, low_dim*npart)
         else:
             y = torch.cat((y_0,y_1,y_2,y_3), 1)
-            # y = torch.cat((y_0,y_1,y_2), 1)
         
         out0 = self.classifier1(y_0)
         out1 = self.classifier2(y_1)
@@ -509,31 +350,23 @@ class embed_net_mulcla(nn.Module):
         out3 = self.classifier4(y_3)
 
         if self.training:
-            # return y, out, (self.l2norm(y_0), self.l2norm(y_1), self.l2norm(y_2), self.l2norm(y_3), self.l2norm(y_4), self.l2norm(y_5))
-            return y, (out0,out1,out2,out3), (self.l2norm(y_0), self.l2norm(y_1), self.l2norm(y_2), self.l2norm(y_3))
-            # return y, (out0,out1,out2), (self.l2norm(y_0), self.l2norm(y_1), self.l2norm(y_2))
+            x_g = torch.cat([att(x_pool, adj) for att in self.attentions], dim=1)    # x_g : [batch_size,nhead*low_dim]
+            x_g = F.elu(self.out_att(x_g, adj))
+
+            return y, (out0,out1,out2,out3), (self.l2norm(y_0), self.l2norm(y_1), self.l2norm(y_2), self.l2norm(y_3)), F.log_softmax(x_g, dim=1)
         else:
             x_0 = self.l2norm(x_0)
             x_1 = self.l2norm(x_1)
             x_2 = self.l2norm(x_2)
             x_3 = self.l2norm(x_3)
-            # x_4 = self.l2norm(x_4)
-            # x_5 = self.l2norm(x_5)
 
-            # x = torch.cat((x_0, x_1, x_2, x_3, x_4, x_5), 1)
             x = torch.cat((x_0, x_1, x_2, x_3), 1)
-            # x = torch.cat((x_0, x_1, x_2), 1)
 
             y_0 = self.l2norm(y_0)
             y_1 = self.l2norm(y_1)
             y_2 = self.l2norm(y_2)
             y_3 = self.l2norm(y_3)
-            # y_4 = self.l2norm(y_4)
-            # y_5 = self.l2norm(y_5)
 
-            # y = torch.cat((y_0, y_1, y_2, y_3, y_4, y_5), 1)            #(batch_size, low_dim*npart)
-            y = torch.cat((y_0,y_1,y_2,y_3), 1)
-            # y = torch.cat((y_0,y_1,y_2), 1)
+            y = torch.cat((y_0, y_1, y_2, y_3), 1)
 
             return x, y, (out0,out1,out2,out3)
-            # return x, y, (out0,out1,out2)

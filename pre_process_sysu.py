@@ -47,6 +47,7 @@ for img_path in files_ir:
 pid2label = {pid:label for label, pid in enumerate(pid_container)}
 fix_image_width = 144
 fix_image_height = 288
+
 def read_imgs(train_image):
     train_img = []
     train_label = []

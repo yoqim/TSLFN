@@ -14,6 +14,7 @@ from data_manager import *
 from eval_metrics import eval_sysu, eval_regdb
 
 from models.shared_model import embed_net_shared,embed_net_mulcla
+from cam.grad_cam import _CAM
 from color import *
 from utils import *
 import Transform as transforms
@@ -109,7 +110,8 @@ else:
 
 suffix += '_sharenet{}'.format(args.share_net)  
 suffix += '_npart{}'.format(args.npart)    
-suffix += '_mulcla4'                 
+suffix += '_mulcla4'                    
+suffix += '_cam'                    
 # suffix += '_debug'                    
 # suffix += '_RGAs4_res'
 
@@ -293,6 +295,7 @@ def extract_feat(data_loader,data_num,forward_mode):
 
 
 
+cam = _CAM(net)
 
 def train(epoch):
     current_lr = adjust_learning_rate(optimizer, epoch, change_epoch=[60,90])
@@ -315,7 +318,42 @@ def train(epoch):
 
         data_time.update(time.time() - end)
 
-        y, outputs, feat = net(input1, input2, cam_weight=None) 
+        if epoch == 0 or epoch>0:
+            cam._register()
+            print('**'*10)
+            print('before forward')
+            print(len(cam.grads))
+            print(len(cam.fmaps))
+
+            y, outputs, feat = net(input1, input2, cam_weight=weights) 
+            # y: backbone outputs -> triplet loss;
+            # outputs: classifier outputs -> id loss; 
+            # feat: feature after l2norm -> hc loss;
+            print('after forward')
+            print(len(cam.grads))
+            print(len(cam.fmaps))
+        
+            print("fmap[1,1,...] sum: {:.2f}".format(torch.sum(cam.fmaps[0][1,1,...])))
+
+            import pdb;pdb.set_trace()
+            sorted_output = get_sorted_ids(outputs)
+            for pid, sid in enumerate(sorted_output):
+                # cam.backward(outputs[pid],ids=labels.unsqueeze(1))
+                cam.backward(outputs[pid],ids=sid[:, [0]])
+            
+            print('after backward')
+            print(len(cam.grads))
+            
+            import pdb;pdb.set_trace()
+            weights = cam.generate()
+            # print("[after] weight sum {}".format(torch.sum(weights)))
+
+            cam._remove()
+            # print("cam.fmaps len, ",len(cam.fmaps))
+            # print('cam.grads len: ',len(cam.grads))
+            # import pdb;pdb.set_trace()
+        else:
+            y, outputs, feat = net(input1, input2, cam_weight=None) 
 
         loss_tri, _ = criterion_tri(y, labels) 
         

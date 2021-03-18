@@ -15,7 +15,7 @@ class SYSUData(data.Dataset):
 
         train_thermal_image = np.load(data_dir + 'train_ir_resized_img.npy')
         self.train_thermal_label = np.load(data_dir + 'train_ir_resized_label.npy')
-        
+
         # RGB format
         self.train_color_image = train_color_image
         self.train_thermal_image = train_thermal_image
