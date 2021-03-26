@@ -125,7 +125,11 @@ def eval_sysu_debug(distmat, q_pids, g_pids, q_camids, g_camids, query_img_path,
         new_match = (new_cmc == q_pid).astype(np.int32)
 
         first_right_idx = np.where(new_match == 1)[0][0]
-        if first_right_idx>10 and first_right_idx<20:
+        # if first_right_idx>5 and first_right_idx<10:
+        # if first_right_idx>10 and first_right_idx<20:
+        # if first_right_idx>10:
+        if first_right_idx>0 and first_right_idx<5:
+        # if first_right_idx == 0:
             bad_q_ids.append(q_idx)
             bad_q_labels.append(q_pid)
             bgl = new_cmc[:max_rank]
@@ -169,6 +173,7 @@ def eval_sysu_debug(distmat, q_pids, g_pids, q_camids, g_camids, query_img_path,
         write_ids_to_txt(bad_q_ids,bad_q_labels,bad_g_labels,'./result/sysu_badcase_all_single_mAP{:.2f}.id'.format(mAP*100))
 
     print("bad case num: {}/{}".format(len(bad_q_ids),num_q))
+    print("ratio : {:.2f}%".format((len(bad_q_ids)/num_q)*100))
     return new_all_cmc, mAP, bad_q_ids, bad_q_labels, bad_g_labels, bad_q_paths, bad_g_paths
     
 def eval_regdb(distmat, q_pids, g_pids, max_rank=20):

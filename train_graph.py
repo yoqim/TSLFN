@@ -12,14 +12,13 @@ import torch.utils.data as data
 from data_loader import SYSUData, RegDBData, TestData
 from data_manager import *
 from eval_metrics import eval_sysu, eval_regdb
-
 from models.model_ddag import embed_net_graph
+
 from color import *
 from utils import *
 import Transform as transforms
 from heterogeneity_loss import hetero_loss
 from triplet_loss import OriTripletLoss
-import xlwt,xlrd
 
 parser = argparse.ArgumentParser(description='PyTorch Cross-Modality Training')
 parser.add_argument('--dataset', default='sysu',  help='dataset name: regdb or sysu]')
@@ -109,9 +108,9 @@ else:
 
 suffix += '_sharenet{}'.format(args.share_net)  
 suffix += '_mulcla4'                 
-suffix += '_graph'                 
-suffix += '_debug'                    
-# suffix += '_RGAs4_res'
+suffix += '_graph'
+# suffix += '_debug'                   
+
 
 test_log_file = open(log_path + suffix + '.txt', "w")
 sys.stdout = Logger(log_path + suffix + '_os.txt')
@@ -186,7 +185,7 @@ print('  ------------------------------')
 print('  Data Loading Time:\t {:.3f}'.format(time.time()-end))
 
 print('==> Building model...')
-net = embed_net_graph(args.low_dim, n_class, height=args.img_h, width=args.img_w, npart=args.npart, share_net=args.share_net, branch_name='rgas',alpha=0.2, nheads=4)
+net = embed_net_graph(args.low_dim, n_class, npart=args.npart, share_net=args.share_net, alpha=0.2, nheads=4)
 net.to(device)
 
 if len(args.resume)>0:   
@@ -201,7 +200,6 @@ if len(args.resume)>0:
               .format(args.resume, checkpoint['epoch']))
     else:
         print('==> no checkpoint found at {}'.format(args.resume))
-
 
 thd = args.thd
 criterion = nn.CrossEntropyLoss()
@@ -218,7 +216,7 @@ def set_ignored_params(net):
     for i in range(args.npart):
         ignored_params += eval("list(map(id, net.feature{}.parameters()))".format(i+1))
         ignored_params += eval("list(map(id, net.classifier{}.parameters()))".format(i+1))
-
+    
     return ignored_params
 
 
@@ -234,12 +232,13 @@ optimizer = optim.SGD([
     {'params': net.classifier1.parameters(), 'lr': args.lr},
     {'params': net.classifier2.parameters(), 'lr': args.lr},
     {'params': net.classifier3.parameters(), 'lr': args.lr},
-    {'params': net.classifier4.parameters(), 'lr': args.lr}
-    ],
-    weight_decay=5e-4, momentum=0.9, nesterov=True)
+    {'params': net.classifier4.parameters(), 'lr': args.lr},
+    ],weight_decay=5e-4, momentum=0.9, nesterov=True)
 
 def adjust_learning_rate(optimizer, epoch, change_epoch=[30,60]):
     """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
+    
+    #### Warm-up
     if epoch < 10:
         lr = args.lr * (epoch + 1) / 10
     elif epoch < change_epoch[0]:
@@ -248,22 +247,13 @@ def adjust_learning_rate(optimizer, epoch, change_epoch=[30,60]):
         lr = args.lr * 0.1
     else:
         lr = args.lr * 0.01
-    
+
     for i in range(len(optimizer.param_groups)):
         if i==0:
             optimizer.param_groups[i]['lr'] = 0.1*lr
         else:
             optimizer.param_groups[i]['lr'] = lr
     return lr
-
-def get_sorted_ids(outputs):
-    sorted_logits = []
-    for lo in outputs:
-        output = F.softmax(lo, dim=1)
-        _,ids = output.sort(dim=1, descending=True)
-        sorted_logits.append(ids)
-
-    return sorted_logits              # ordered 
 
 
 def CalAccurate(cla_output,labels):
@@ -287,7 +277,7 @@ def extract_feat(data_loader,data_num,forward_mode):
     return feats 
 
 
-def train(epoch,w_G):
+def train(epoch, w_G):
     current_lr = adjust_learning_rate(optimizer, epoch, change_epoch=[60,90])
     train_loss = AverageMeter()
     data_time = AverageMeter()
@@ -317,19 +307,20 @@ def train(epoch,w_G):
 
         y, outputs, feat, g_out = net(input1, input2, adj=adj_norm) 
 
-        loss_tri, _ = criterion_tri(y, labels) 
+        loss_tri, ccc = criterion_tri(y, labels) 
         loss_G = F.nll_loss(g_out, labels)
-        
+
         loss_id0 = criterion(outputs[0], labels)
         loss_id1 = criterion(outputs[1], labels)
         loss_id2 = criterion(outputs[2], labels)
         loss_id3 = criterion(outputs[3], labels)
+        loss_id = loss_id0 + loss_id1 + loss_id2 + loss_id3
         
         cc = 0
         for out in outputs:
             cc += CalAccurate(out,labels)
         correct += cc/len(outputs)
-        
+
         het_feat0 = feat[0].chunk(2, 0)
         het_feat1 = feat[1].chunk(2, 0)
         het_feat2 = feat[2].chunk(2, 0)
@@ -339,13 +330,11 @@ def train(epoch,w_G):
         loss_c1 = criterion_het(het_feat1[0], het_feat1[1], label1, label2)
         loss_c2 = criterion_het(het_feat2[0], het_feat2[1], label1, label2)
         loss_c3 = criterion_het(het_feat3[0], het_feat3[1], label1, label2)
+        # loss_c = criterion_het(y[:args.batch_size,:], y[args.batch_size:,:], label1, label2)
+        loss_hc = loss_c0 + loss_c1 + loss_c2 + loss_c3
 
-        loss0 = loss_id0 + w_hc * loss_c0
-        loss1 = loss_id1 + w_hc * loss_c1
-        loss2 = loss_id2 + w_hc * loss_c2
-        loss3 = loss_id3 + w_hc * loss_c3
+        loss = loss_id + w_hc * loss_hc + loss_tri
 
-        loss = loss0 + loss1 + loss2 + loss3 + loss_tri
         total_loss = loss + w_G * loss_G
  
         optimizer.zero_grad()
@@ -357,10 +346,12 @@ def train(epoch,w_G):
         batch_time.update(time.time() - end)
         end = time.time()
         if batch_idx % loss_print_interval==0:
-            print("=> ID loss {:.2f}".format(loss_id0))
-            print("=> HC loss {:.2f}".format(loss_c0))
+            print("=> ID loss {:.2f}".format(loss_id))
+            print("=> HC loss {:.2f}".format(loss_hc))
             print("=> Triplet loss {:.2f}".format(loss_tri))
             print("=> G loss {:.2f}".format(loss_G))
+            print("=> tri loss correct {:.2f}%".format(ccc*100.))
+
             print('Epoch: [{}][{}/{}] '
                   'Time: {batch_time.val:.3f} ({batch_time.avg:.3f}) '
                   'Data: {data_time.val:.3f} ({data_time.avg:.3f}) '
@@ -397,7 +388,7 @@ per_id = args.batch_size / per_img
 w_hc = args.w_hc
 w_G = 0
 
-for epoch in range(start_epoch, args.epochs+1-start_epoch):
+for epoch in range(start_epoch, args.epochs+1):
     print('==> Preparing Data Loader...')
     # identity sampler
     sampler = IdentitySampler(trainset.train_color_label, \
@@ -409,25 +400,25 @@ for epoch in range(start_epoch, args.epochs+1-start_epoch):
     
     w_G = train(epoch,w_G)
 
-    if epoch > 0 and epoch % 2 == 0:
+    # if epoch > 0 and epoch % 2 == 0:
+    if epoch >= 1 :
         print (red('Test Epoch: {}'.format(epoch)))
         print ('Test Epoch: {}'.format(epoch),file=test_log_file)
 
         cmc, mAP = test(epoch)
 
-        print('FC:   Rank-1: {:.2%} | Rank-10: {:.2%} | Rank-20: {:.2%}| mAP: {:.2%}'.format(
-                cmc[0], cmc[9], cmc[19], mAP))
+        print(red('FC:   Rank-1: {:.2%} | Rank-10: {:.2%} | Rank-20: {:.2%}| mAP: {:.2%}'.format(
+                cmc[0], cmc[9], cmc[19], mAP)))
         print('FC:   Rank-1: {:.2%} | Rank-10: {:.2%} | Rank-20: {:.2%}| mAP: {:.2%}'.format(
                 cmc[0], cmc[9], cmc[19], mAP), file = test_log_file)
         test_log_file.flush()
         
-        if mAP > best_mAP:
-            if 'debug' not in suffix:
-                best_mAP = mAP
-                state = {
-                    'net': net.state_dict(),
-                    'cmc': cmc,
-                    'mAP': mAP,
-                    'epoch': epoch,
-                }
-                torch.save(state, checkpoint_path + suffix + '_best.t')
+        if (mAP > best_mAP) and ('debug' not in suffix):
+            best_mAP = mAP
+            state = {
+                'net': net.state_dict(),
+                'cmc': cmc,
+                'mAP': mAP,
+                'epoch': epoch,
+            }
+            torch.save(state, checkpoint_path + suffix + '_best.t')

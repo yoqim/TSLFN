@@ -36,8 +36,6 @@ class OriTripletLoss(nn.Module):
         y = torch.ones_like(dist_an)
         loss = self.ranking_loss(dist_an, dist_ap, y)
 
-        # print("dist_an, {:.2f}".format(torch.mean(dist_an)))
-        # print("dist_ap, {:.2f}".format(torch.mean(dist_ap)))
-        
         correct = torch.ge(dist_an, dist_ap).sum().item()               # c = torch.ge(a,b) -> if a>b 对应位置c=1
+        correct = correct/n
         return loss, correct

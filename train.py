@@ -109,7 +109,7 @@ else:
 
 suffix += '_sharenet{}'.format(args.share_net)  
 suffix += '_npart{}'.format(args.npart)    
-suffix += '_mulcla4'                 
+suffix += '_mulcla4_baseline'                 
 # suffix += '_debug'                    
 # suffix += '_RGAs4_res'
 
@@ -126,8 +126,8 @@ print('==> Loading data..')
 normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],std=[0.229, 0.224, 0.225])
 transform_train = transforms.Compose([
     transforms.ToPILImage(),
-    transforms.RectScale(args.img_h, args.img_w),
-    transforms.RandomCrop((args.img_h,args.img_w)),
+    # transforms.RectScale(args.img_h, args.img_w),
+    # transforms.RandomCrop((args.img_h,args.img_w)),
     transforms.RandomHorizontalFlip(),
     transforms.ToTensor(),
     normalize,
@@ -242,16 +242,34 @@ optimizer = optim.SGD([
     ],
     weight_decay=5e-4, momentum=0.9, nesterov=True)
 
-def adjust_learning_rate(optimizer, epoch, change_epoch=[30,60]):
+def adjust_learning_rate(optimizer, epoch, change_epoch=[30, 60]):
     """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
-    if epoch < 10:
-        lr = args.lr * (epoch + 1) / 10
-    elif epoch < change_epoch[0]:
+    
+    #### Huang's method     
+    # if epoch < 10:
+    #     lr = args.lr * (epoch + 1) / 10
+    # elif epoch < change_epoch[0]:
+    #     lr = args.lr
+    # elif epoch >= change_epoch[0] and epoch < change_epoch[1]:
+    #     lr = args.lr * 0.1
+    # else:
+    #     lr = args.lr * 0.01
+
+    #### Huang's method
+    if epoch < 5:
         lr = args.lr
-    elif epoch >= change_epoch[0] and epoch < change_epoch[1]:
-        lr = args.lr * 0.1
+    elif epoch < 10:
+        lr = args.lr * 0.75
+    elif epoch < 15:
+        lr = args.lr * 0.5
+    elif epoch < 20:
+        lr = args.lr * 0.25
+    elif epoch < 25:
+        lr = args.lr * 0.125
+    elif epoch < 30:
+        lr = args.lr * 0.1  
     else:
-        lr = args.lr * 0.01
+        lr = args.lr * 0.05
     
     for i in range(len(optimizer.param_groups)):
         if i==0:

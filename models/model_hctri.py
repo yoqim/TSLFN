@@ -7,8 +7,6 @@ import math
 
 from models.attention import GraphAttentionLayer
 from models.resnet import resnet50
-from models.models_utils.rga_modules import RGA_Module
-
 
 class Normalize(nn.Module):
     def __init__(self, power=2):
@@ -19,6 +17,7 @@ class Normalize(nn.Module):
         norm = x.pow(self.power).sum(1, keepdim=True).pow(1. / self.power)
         out = x.div(norm)
         return out
+
 
 
 ##############################
@@ -50,7 +49,7 @@ class FeatureBlock(nn.Module):
         feat_block = []
         feat_block += [nn.Linear(input_dim, low_dim)] 
         feat_bn = nn.BatchNorm1d(low_dim)
-        # feat_bn.bias.requires_grad_(False)
+        feat_bn.bias.requires_grad_(False)
 
         feat_block += [feat_bn]
         
@@ -155,7 +154,6 @@ class base_resnet(nn.Module):
                 for i in range(self.share_net, 5):
                     setattr(self.base,'layer'+str(i), getattr(model_base,'layer'+str(i)))
 
-
     def forward(self, x):
         if self.share_net == 0:
             x = self.base.conv1(x)
@@ -177,9 +175,9 @@ class base_resnet(nn.Module):
         return x
 
 
-class embed_net_graph(nn.Module):
-    def __init__(self, low_dim, class_num, npart, share_net=3, alpha=0.2, nheads=4):
-        super(embed_net_graph, self).__init__()
+class embed_net_hctri(nn.Module):
+    def __init__(self, low_dim, class_num, npart, share_net=2, alpha=0.2, nheads=4):
+        super(embed_net_hctri, self).__init__()
         
         self.npart = npart
         pool_dim = 2048
@@ -210,7 +208,6 @@ class embed_net_graph(nn.Module):
                 self.add_module('attention_{}'.format(i), attention)
 
             self.out_att = GraphAttentionLayer(low_dim*nheads, class_num, alpha=alpha, concat=False)
-
 
 
     def _gen_feat_part(self, feat):
@@ -271,14 +268,40 @@ class embed_net_graph(nn.Module):
         if modal==0:
             x_pool = self.avgpool(x)
             x_pool = x_pool.view(x_pool.size(0), x_pool.size(1))
+            
+            [x1,x2] = x.chunk(2, 0)
+            x1 = x1.contiguous()
+            x2 = x2.contiguous()
 
-        x = self._gen_feat_part(x)
-        x = self._chunk_feat(x)
+            x1 = self._gen_feat_part(x1)
+            x1 = self._chunk_feat(x1)
 
-        x_0 = x[0]
-        x_1 = x[1]
-        x_2 = x[2]
-        x_3 = x[3]
+            x2 = self._gen_feat_part(x2)
+            x2 = self._chunk_feat(x2)
+
+            x_0 = torch.cat((x1[0], x2[0]), 0)
+            x_1 = torch.cat((x1[1], x2[1]), 0)
+            x_2 = torch.cat((x1[2], x2[2]), 0)
+            x_3 = torch.cat((x1[3], x2[3]), 0)
+
+        elif modal == 1:
+            x1 = self._gen_feat_part(x)
+            x1 = self._chunk_feat(x1)
+
+            x_0 = x1[0]
+            x_1 = x1[1]
+            x_2 = x1[2]
+            x_3 = x1[3]
+
+        
+        elif modal == 2:
+            x2 = self._gen_feat_part(x)
+            x2 = self._chunk_feat(x2)
+            
+            x_0 = x2[0]
+            x_1 = x2[1]
+            x_2 = x2[2]
+            x_3 = x2[3]
 
         y_0 = self.feature1(x_0)                    # head: (vis 32, the 32)
         y_1 = self.feature2(x_1)
@@ -307,7 +330,7 @@ class embed_net_graph(nn.Module):
             x_g = torch.cat([att(x_pool, adj) for att in self.attentions], dim=1)    # x_g : [batch_size,nhead*low_dim]
             x_g = F.elu(self.out_att(x_g, adj))
 
-            return y, (out0,out1,out2,out3), (self.l2norm(y_0), self.l2norm(y_1), self.l2norm(y_2), self.l2norm(y_3)), F.log_softmax(x_g, dim=1)
+            return y, (out0,out1,out2,out3), (y_0,y_1,y_2,y_3), F.log_softmax(x_g, dim=1)
         else:
             x_0 = self.l2norm(x_0)
             x_1 = self.l2norm(x_1)
@@ -316,4 +339,11 @@ class embed_net_graph(nn.Module):
 
             x = torch.cat((x_0, x_1, x_2, x_3), 1)
 
-            return x, self.l2norm(y), (out0,out1,out2,out3)
+            y_0 = self.l2norm(y_0)
+            y_1 = self.l2norm(y_1)
+            y_2 = self.l2norm(y_2)
+            y_3 = self.l2norm(y_3)
+
+            y = torch.cat((y_0, y_1, y_2, y_3), 1)
+
+            return x, y, (out0,out1,out2,out3)

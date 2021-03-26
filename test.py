@@ -16,6 +16,7 @@ from eval_metrics import eval_sysu, eval_regdb, eval_regdb_debug, eval_sysu_debu
 
 from models.shared_model import embed_net_mulcla
 # from models.model_debug import embed_net_debug           # vis pool feature distribution on original images
+from models.model_ddag import embed_net_graph
 
 from utils import *
 import time 
@@ -60,7 +61,7 @@ pool_dim = 2048
 low_dim = 512
 test_batch = 64
 npart = 4
-share_net = 2
+share_net = 3
 
 print("visualization = ",args.vis)
 if args.vis:
@@ -174,7 +175,7 @@ def draw_retri_images_sysu(bad_q_labels, bad_g_labels, bad_q_paths, bad_g_paths,
 
     print("draw_id_list: ",draw_id_list)
 
-    fig=plt.figure(figsize=(50, 50))
+    fig=plt.figure(figsize=(20, 50))
     row = len(draw_id_list)
     column = top_k_to_plot+1 
     for qi, qidx in enumerate(draw_id_list):
@@ -200,7 +201,7 @@ def draw_retri_images_sysu(bad_q_labels, bad_g_labels, bad_q_paths, bad_g_paths,
                 color_mode = (255, 0, 0)            # wrong
             else:
                 color_mode = (0, 255, 0)            # right
-                print("get one hit!")
+
             g_img = draw_rect(g_img, color_mode)
 
             fig.add_subplot(row,column,qi*(top_k_to_plot+1)+2+gi)
@@ -218,7 +219,9 @@ def draw_retri_images_sysu(bad_q_labels, bad_g_labels, bad_q_paths, bad_g_paths,
 ##################
 
 print('==> Building model..')
-net = embed_net_mulcla(low_dim, n_class, height=img_h, width=img_w, npart=npart, share_net=share_net, branch_name='rgas')
+# net = embed_net_mulcla(low_dim, n_class, height=img_h, width=img_w, npart=npart, share_net=share_net, branch_name='rgas')
+net = embed_net_graph(low_dim, n_class, height=img_h, width=img_w, npart=npart, share_net=share_net, branch_name=None, alpha=0.2, nheads=4)
+
 net.cuda()    
 net = load_model_params(net)
 net.eval()
@@ -236,7 +239,7 @@ transform_test = transforms.Compose([
 
 if dataset =='sysu':
     query_img_path, query_label, query_cam = process_query_sysu('../IVReIDData/SYSU-MM01/', mode = args.mode)
-    gall_img_path, gall_label, gall_cam = process_gallery_sysu('../IVReIDData/SYSU-MM01/', mode = args.mode, gall_mode=args.gall_mode)
+    # gall_img_path, gall_label, gall_cam = process_gallery_sysu('../IVReIDData/SYSU-MM01/', mode = args.mode, gall_mode=args.gall_mode)
 
 elif dataset =='regdb':
     query_img_path, query_label = process_test_regdb(data_path, trial = args.trial, modal = 'visible')
@@ -246,19 +249,18 @@ elif dataset =='regdb':
     gall_loader = data.DataLoader(gallset, batch_size=test_batch, shuffle=False, num_workers=4)
     
 nquery = len(query_label)
-ngall = len(gall_label)
 print("  ------------------------------")
 print("  Dataset statistics:")
 print("  ------------------------------")
 print("  subset   | # ids | # images")
 print("  ------------------------------")
-print("  query (IR)     | {:5d} | {:8d}".format(len(np.unique(query_label)), nquery))
-print("  gallery (RGB)  | {:5d} | {:8d}".format(len(np.unique(gall_label)), ngall))
+print("  query (IR)     | 96 | 3803")
+print("  gallery (RGB)  | 96 | 301")
 print("  ------------------------------")
 
 queryset = TestData(query_img_path, query_label, transform = transform_test, img_size=(img_w, img_h))   
 query_loader = data.DataLoader(queryset, batch_size=test_batch, shuffle=False, num_workers=4)
-query_feat, query_pred = extract_feat(query_loader,nquery,test_mode[1])    
+query_feat = extract_feat(query_loader,nquery,test_mode[1])    
 # save_feat(query_feat_pool,'regdb_query_feat_rga.npy')
 
 
@@ -298,9 +300,10 @@ if dataset =='regdb':
 
     
 elif dataset =='sysu':
-    n_trial = 2
+    n_trial = 3
     for trial in range(n_trial):
-        gall_img_path, gall_label, gall_cam = process_gallery_sysu(data_path, mode=args.mode, gall_mode=args.gall_mode)
+        gall_img_path, gall_label, gall_cam = process_gallery_sysu('../IVReIDData/SYSU-MM01/', mode=args.mode, gall_mode=args.gall_mode)
+        ngall = len(gall_label)
         
         trial_gallset = TestData(gall_img_path, gall_label, transform=transform_test,img_size=(img_w,img_h))
         trial_gall_loader  = data.DataLoader(trial_gallset, batch_size=test_batch, shuffle=False, num_workers=4)
@@ -311,11 +314,12 @@ elif dataset =='sysu':
         if args.vis:
             cmc, mAP, bad_match_ids, bad_q_labels, bad_g_labels, bad_q_paths, bad_g_paths = eval_sysu_debug(-distmat, query_label, gall_label, query_cam, gall_cam, query_img_path, gall_img_path, write_bad_to_txt=False)
 
-            draw_retri_images_sysu(bad_q_labels, bad_g_labels,bad_q_paths,bad_g_paths,save_path='./result/{}_badcase_1hitAfter10_mAP{:.2f}_trial{}.pdf'.format(dataset,mAP*100,trial),num_id_to_draw=num_id_to_draw)                    # draw selected bad matches
+            save_name = '{}_1hitA1B5_mAP{:.2f}_trial{}.pdf'.format(dataset,mAP*100,trial)
+            draw_retri_images_sysu(bad_q_labels, bad_g_labels,bad_q_paths,bad_g_paths,save_path='./result/'+save_name,top_k_to_plot=5,num_id_to_draw=num_id_to_draw)                    # draw selected bad matches
         else:
             cmc, mAP = eval_sysu(-distmat, query_label, gall_label, query_cam, gall_cam)
         
-
+        import pdb;pdb.set_trace()
         if trial==0:
             all_cmc = cmc
             all_mAP = mAP

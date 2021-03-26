@@ -8,6 +8,6 @@
 
 
 ###### sysu ###### 
-python test.py --dataset sysu --gpu 1  --resume 'sysu_lr_1.0e-02_md_all_sharenet2_npart4_mulcla4_best.t' --mode all --gall-mode single
+# python test.py --dataset sysu --gpu 1 --resume 'sysu_lr_1.0e-02_md_all_sharenet3_mulcla4_graph_best.t' --mode all --gall-mode single 
 
-
+python test.py --dataset sysu --gpu 1 --vis --resume 'sysu_lr_1.0e-02_md_all_sharenet3_mulcla4_graph_best.t' --mode all --gall-mode single 
